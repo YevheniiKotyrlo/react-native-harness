@@ -622,7 +622,10 @@ export const createHarnessSession = async (
     const getCurrentRunId = () => currentRun?.runId;
     const clientLogCollector = createClientLogCollector();
 
-    const context: HarnessContext = { platform };
+    const context: HarnessContext = {
+      platform,
+      updateSnapshot: globalConfig.updateSnapshot,
+    };
     const crashArtifactWriter = createCrashArtifactWriter({
       runnerName: platform.name,
       platformId: platform.platformId,
