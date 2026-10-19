@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Config as JestConfig } from 'jest-runner';
 import type { TestSuiteResult } from '@react-native-harness/bridge';
 import type { HarnessSession } from '../harness-session.js';
@@ -109,5 +109,40 @@ describe('runHarnessTestFile', () => {
       expect.objectContaining({ title: 'declaration skip', status: 'pending' }),
       expect.objectContaining({ title: 'runtime skip', status: 'pending' }),
     ]);
+  });
+
+  describe('on a Windows host', () => {
+    afterEach(() => {
+      vi.doUnmock('node:path');
+      vi.resetModules();
+    });
+
+    it('names the test file and setup files with forward slashes', async () => {
+      vi.resetModules();
+      vi.doMock('node:path', async (importOriginal) => {
+        const { win32 } = await importOriginal<typeof import('node:path')>();
+        return { ...win32, default: win32 };
+      });
+      const { runHarnessTestFile: runOnWindows } = await import('../run.js');
+      const session = createSession(15000);
+
+      await runOnWindows({
+        testPath: 'C:\\project\\src\\__tests__\\smoke.harness.ts',
+        session,
+        globalConfig: createGlobalConfig({ rootDir: 'C:\\project' }),
+        projectConfig: createProjectConfig({
+          setupFiles: ['C:\\project\\src\\setupFile.ts'],
+          setupFilesAfterEnv: ['C:\\project\\src\\setupFileAfterEnv.ts'],
+        }),
+      });
+
+      expect(session.runTestFile).toHaveBeenCalledWith(
+        'src/__tests__/smoke.harness.ts',
+        expect.objectContaining({
+          setupFiles: ['src/setupFile.ts'],
+          setupFilesAfterEnv: ['src/setupFileAfterEnv.ts'],
+        }),
+      );
+    });
   });
 });
