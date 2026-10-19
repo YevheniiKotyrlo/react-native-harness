@@ -203,7 +203,8 @@ const waitForAgentReady = async (options: {
   startupTimeoutMs: number;
   signal?: AbortSignal;
 }) => {
-  const deadline = Date.now() + options.startupTimeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + options.startupTimeoutMs;
   let lastError: unknown = null;
 
   while (Date.now() < deadline) {
@@ -211,6 +212,7 @@ const waitForAgentReady = async (options: {
     try {
       await waitForAbortable(options.client.health(), options.signal);
       options.signal?.throwIfAborted();
+      xctestAgentLogger.info('XCTest agent ready after %d ms (fork-only experiment)', Date.now() - startedAt);
       return;
     } catch (error) {
       lastError = error;

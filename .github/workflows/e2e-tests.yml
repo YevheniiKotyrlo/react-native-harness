@@ -148,6 +148,15 @@ jobs:
         with:
           xcode-version: '26.4.1'
 
+      # A runner's first boot of a simulator takes minutes; starting it here
+      # lets it run while the job installs and builds, instead of inside the
+      # platform's readiness window.
+      - name: Start booting the iOS simulator
+        run: |
+          udid=$(xcrun simctl list devices available --json | jq -r '.devices | to_entries[] | select(.key | endswith("iOS-26-4")) | .value[] | select(.name == "iPhone 17 Pro") | .udid' | head -n 1)
+          test -n "$udid"
+          xcrun simctl boot "$udid"
+
       - name: Install Watchman
         run: brew install watchman
 
@@ -451,6 +460,15 @@ jobs:
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:
           xcode-version: '26.4.1'
+
+      # A runner's first boot of a simulator takes minutes; starting it here
+      # lets it run while the job installs and builds, instead of inside the
+      # platform's readiness window.
+      - name: Start booting the iOS simulator
+        run: |
+          udid=$(xcrun simctl list devices available --json | jq -r '.devices | to_entries[] | select(.key | endswith("iOS-26-4")) | .value[] | select(.name == "iPhone 17 Pro") | .udid' | head -n 1)
+          test -n "$udid"
+          xcrun simctl boot "$udid"
 
       - name: Install Watchman
         run: brew install watchman
