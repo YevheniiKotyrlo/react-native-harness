@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { MetroConfig } from '@react-native/metro-config';
+import type { CustomResolutionContext } from 'metro-resolver';
 import type { Config as HarnessConfig } from '@react-native-harness/config';
 import { getResolvedEntryPointWithoutExtension } from '../entry-point-utils.js';
 import { createHarnessResolver } from './composite-resolver.js';
@@ -107,6 +108,33 @@ export const createJsxRuntimeResolver = (): HarnessResolver => {
   };
 };
 
+/**
+ * The runtime's peer dependencies — `react` and `react-native` — resolve from
+ * the project whoever imports them. In a monorepo the runtime sits outside the
+ * app, so it would otherwise reach a different copy than the app's own files,
+ * and the bundle would carry two React Natives with separate registries.
+ */
+export const createPeerDependencyOrigin = (
+  projectRoot: string,
+): ((
+  context: CustomResolutionContext,
+  moduleName: string,
+) => CustomResolutionContext) => {
+  const { peerDependencies = {} } = require(
+    '@react-native-harness/runtime/package.json',
+  ) as { peerDependencies?: Record<string, string> };
+  const peerNames = Object.keys(peerDependencies);
+  const projectOrigin = path.join(projectRoot, 'package.json');
+
+  return (context, moduleName) =>
+    peerNames.some(
+      (peerName) =>
+        moduleName === peerName || moduleName.startsWith(`${peerName}/`),
+    )
+      ? { ...context, originModulePath: projectOrigin }
+      : context;
+};
+
 export const getHarnessResolver = (
   metroConfig: MetroConfig,
   harnessConfig: HarnessConfig,
@@ -119,6 +147,13 @@ export const getHarnessResolver = (
     createTsConfigResolver(process.cwd()),
     userResolver,
   ].filter((resolver): resolver is HarnessResolver => !!resolver);
+  const resolveRequest = createHarnessResolver(resolvers);
+  const toPeerDependencyOrigin = createPeerDependencyOrigin(process.cwd());
 
-  return createHarnessResolver(resolvers);
+  return (context, moduleName, platform) =>
+    resolveRequest(
+      toPeerDependencyOrigin(context, moduleName),
+      moduleName,
+      platform,
+    );
 };
