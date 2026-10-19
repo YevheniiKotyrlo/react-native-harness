@@ -326,20 +326,16 @@ class UIHelperImpl(
         promise: Promise,
     ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            val bitmap = Bitmap.createBitmap(region.width(), region.height(), Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bitmap)
-            canvas.translate(-region.left.toFloat(), -region.top.toFloat())
-            window.decorView.rootView.draw(canvas)
-            promise.resolve(encodePng(bitmap))
+            promise.resolve(encodePng(drawWindowRegion(window, region)))
             return
         }
 
         val windowPixels = Bitmap.createBitmap(region.width(), region.height(), Bitmap.Config.ARGB_8888)
         PixelCopy.request(window, region, windowPixels, { windowResult ->
             if (windowResult != PixelCopy.SUCCESS) {
-                Log.e(TAG, "PixelCopy of the window failed with result $windowResult")
+                Log.w(TAG, "PixelCopy of the window failed with result $windowResult, drawing the view tree instead")
                 windowPixels.recycle()
-                promise.resolve(null)
+                promise.resolve(encodePng(drawWindowRegion(window, region)))
                 return@request
             }
 
@@ -347,11 +343,6 @@ class UIHelperImpl(
                 Rect.intersects(region, rectInWindow(surfaceView))
             }
             copySurfaceViews(surfaceViews, region) { surfaceLayers ->
-                if (surfaceLayers == null) {
-                    windowPixels.recycle()
-                    promise.resolve(null)
-                    return@copySurfaceViews
-                }
                 val screenshot = Bitmap.createBitmap(region.width(), region.height(), Bitmap.Config.ARGB_8888)
                 val canvas = Canvas(screenshot)
                 // A SurfaceView's surface sits behind its window, which leaves a transparent hole over it.
@@ -366,18 +357,29 @@ class UIHelperImpl(
         }, mainHandler)
     }
 
+    private fun drawWindowRegion(
+        window: Window,
+        region: Rect,
+    ): Bitmap {
+        val bitmap = Bitmap.createBitmap(region.width(), region.height(), Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.translate(-region.left.toFloat(), -region.top.toFloat())
+        window.decorView.rootView.draw(canvas)
+        return bitmap
+    }
+
     private class SurfaceLayer(
         val pixels: Bitmap,
         val left: Float,
         val top: Float,
     )
 
-    // Copies each SurfaceView's surface in turn and hands back its layers, or null if a copy failed. A surface with no
-    // frame yet shows nothing on screen, so it adds no layer.
+    // Copies each SurfaceView's surface in turn and hands back its layers. A surface with no frame yet, or released
+    // since it was found, shows nothing on screen, so it adds no layer, and neither does a copy that fails.
     private fun copySurfaceViews(
         surfaceViews: List<SurfaceView>,
         region: Rect,
-        onCopied: (List<SurfaceLayer>?) -> Unit,
+        onCopied: (List<SurfaceLayer>) -> Unit,
     ) {
         val layers = mutableListOf<SurfaceLayer>()
 
@@ -389,9 +391,9 @@ class UIHelperImpl(
             val surfaceView = surfaceViews[index]
             val surfaceRect = rectInWindow(surfaceView)
             val pixels = Bitmap.createBitmap(surfaceRect.width(), surfaceRect.height(), Bitmap.Config.ARGB_8888)
-            PixelCopy.request(surfaceView, pixels, { surfaceResult ->
-                when (surfaceResult) {
-                    PixelCopy.SUCCESS -> {
+            val onPixelsCopied =
+                PixelCopy.OnPixelCopyFinishedListener { surfaceResult ->
+                    if (surfaceResult == PixelCopy.SUCCESS) {
                         layers.add(
                             SurfaceLayer(
                                 pixels,
@@ -399,20 +401,20 @@ class UIHelperImpl(
                                 (surfaceRect.top - region.top).toFloat(),
                             ),
                         )
-                        copyFrom(index + 1)
-                    }
-                    PixelCopy.ERROR_SOURCE_NO_DATA -> {
+                    } else {
+                        if (surfaceResult != PixelCopy.ERROR_SOURCE_NO_DATA) {
+                            Log.w(TAG, "PixelCopy of a SurfaceView failed with result $surfaceResult")
+                        }
                         pixels.recycle()
-                        copyFrom(index + 1)
                     }
-                    else -> {
-                        Log.e(TAG, "PixelCopy of a SurfaceView failed with result $surfaceResult")
-                        pixels.recycle()
-                        layers.forEach { layer -> layer.pixels.recycle() }
-                        onCopied(null)
-                    }
+                    copyFrom(index + 1)
                 }
-            }, mainHandler)
+            try {
+                PixelCopy.request(surfaceView, pixels, onPixelsCopied, mainHandler)
+            } catch (e: IllegalArgumentException) {
+                pixels.recycle()
+                copyFrom(index + 1)
+            }
         }
 
         copyFrom(0)

@@ -13,11 +13,11 @@ describe('Screenshot of views drawn on a surface of their own', () => {
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
         <SolidColorTextureView
           testID="texture-view"
-          style={{ width: 100, height: 100 }}
+          style={{ width: 96, height: 96 }}
         />
         <SolidColorSurfaceView
           testID="surface-view"
-          style={{ width: 100, height: 100 }}
+          style={{ width: 96, height: 96 }}
         />
       </View>
     );
