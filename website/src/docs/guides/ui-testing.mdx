@@ -146,6 +146,10 @@ test('screenshot with custom options', async () => {
 | `diffColor`            | `[number, number, number]`  | `[255, 0, 0]`  | RGB color for highlighting differences                                     |
 | `ignoreRegions`        | `Array<{x,y,width,height}>` | `[]`           | Regions to exclude from comparison                                         |
 
+### Creating snapshots
+
+`toMatchImageSnapshot` stores each snapshot as `__image_snapshots__/<runner>/<name>.png` next to the test file. When that file does not exist, the test writes it and passes, except in Jest's CI mode (on when the `CI` environment variable is set, or with `--ci`), where it fails and saves the received image beside it as `<name>-actual.png`. Create snapshots outside CI mode, locally or with `--ci=false`, and commit them.
+
 ### Element-specific screenshots
 
 You can capture screenshots of specific elements instead of the entire screen:

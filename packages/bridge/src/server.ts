@@ -155,7 +155,13 @@ export const createHarnessBridge = async (
       localMethods: {
         'device.screenshot.receive': (ref) => receiveScreenshot(binaryStore, ref),
         'test.matchImageSnapshot': (screenshot, testPath, opts) =>
-          matchImageSnapshot(screenshot, testPath, opts, context.platform.name),
+          matchImageSnapshot(
+            screenshot,
+            testPath,
+            opts,
+            context.platform.name,
+            context.updateSnapshot
+          ),
       },
       transport: createRpcTransport(transport),
       onEvent: (event) => {
