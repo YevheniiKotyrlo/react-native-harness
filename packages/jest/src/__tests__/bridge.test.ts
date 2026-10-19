@@ -3,7 +3,10 @@
  * connectToHarness (app side). Tests the full connection lifecycle and
  * RPC round-trip without coupling tests to the transport internals.
  */
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessBridge } from '@react-native-harness/bridge/server';
 import { createHarnessBridge } from '@react-native-harness/bridge/server';
@@ -11,13 +14,16 @@ import { connectToHarness } from '@react-native-harness/bridge/client';
 import type { HarnessContext } from '@react-native-harness/bridge';
 import type { TestSuiteResult } from '@react-native-harness/bridge';
 
-const makeContext = (): HarnessContext => ({
+const makeContext = (
+  updateSnapshot: HarnessContext['updateSnapshot'] = 'new',
+): HarnessContext => ({
   platform: {
     name: 'ios',
     platformId: 'ios',
     runner: '/dev/null',
     config: {},
   },
+  updateSnapshot,
 });
 
 // ---------------------------------------------------------------------------
@@ -233,6 +239,48 @@ describe('bridge: createHarnessBridge + connectToHarness', () => {
 
       expect(written.equals(Buffer.from(data))).toBe(true);
       handle.disconnect();
+    });
+  });
+
+  describe('image snapshots', () => {
+    it('fails a missing snapshot without writing it when the run writes no new snapshots', async () => {
+      bridge.dispose();
+      bridge = await createHarnessBridge({
+        port: 0,
+        context: makeContext('none'),
+      });
+      bridgePort = (bridge.ws.address() as { port: number }).port;
+
+      const directory = await fs.mkdtemp(
+        path.join(os.tmpdir(), 'harness-bridge-snapshot-'),
+      );
+
+      try {
+        const receivedPath = path.join(directory, 'received.png');
+        await fs.writeFile(receivedPath, 'received image');
+
+        const connectionPromise = bridge.nextConnection();
+        const handle = await connect();
+        handle.reportReady(device);
+        await connectionPromise;
+
+        const result = await handle.matchImageSnapshot(
+          { path: receivedPath },
+          path.join(directory, 'example.harness.tsx'),
+          { name: 'square' },
+          'ios',
+        );
+
+        expect(result.pass).toBe(false);
+        expect(
+          existsSync(
+            path.join(directory, '__image_snapshots__', 'ios', 'square.png'),
+          ),
+        ).toBe(false);
+        handle.disconnect();
+      } finally {
+        await fs.rm(directory, { force: true, recursive: true });
+      }
     });
   });
 
