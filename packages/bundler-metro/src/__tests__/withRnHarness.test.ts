@@ -153,6 +153,28 @@ describe('withRnHarness', () => {
     expect(config.transformer?.unstable_workerThreads).toBe(true);
   });
 
+  it("runs the project's own InitializeCore before the main module", async () => {
+    const { withRnHarness } = await import('../withRnHarness.js');
+    const initializeCore =
+      '/tmp/app/node_modules/react-native/Libraries/Core/InitializeCore.js';
+
+    const config = (await withRnHarness(
+      {
+        projectRoot: '/tmp/app',
+        serializer: { getModulesRunBeforeMainModule: () => [initializeCore] },
+      },
+      true,
+    )()) as unknown as {
+      serializer: {
+        getModulesRunBeforeMainModule: (entryFilePath: string) => string[];
+      };
+    };
+
+    expect(
+      config.serializer.getModulesRunBeforeMainModule('/tmp/app/index.js'),
+    ).toEqual([initializeCore]);
+  });
+
   it('inherits the project blockList while keeping test files crawlable', async () => {
     const { withRnHarness } = await import('../withRnHarness.js');
 
