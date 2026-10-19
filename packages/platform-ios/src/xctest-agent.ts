@@ -56,7 +56,7 @@ const XCTEST_AGENT_TARGET_BUNDLE_ID_ENV =
 const XCTEST_AGENT_XCTESTRUN_FILE_ENV = 'HARNESS_IOS_XCTESTRUN_FILE';
 const XCTEST_AGENT_DERIVED_DATA_PATH_ENV =
   'HARNESS_IOS_XCTEST_DERIVED_DATA_PATH';
-const XCTEST_AGENT_STARTUP_TIMEOUT_MS = 120_000;
+const XCTEST_AGENT_STARTUP_TIMEOUT_MS = 540_000;
 const XCTEST_AGENT_STARTUP_POLL_INTERVAL_MS = 250;
 
 type XCTestAgentTarget =
@@ -203,7 +203,8 @@ const waitForAgentReady = async (options: {
   startupTimeoutMs: number;
   signal?: AbortSignal;
 }) => {
-  const deadline = Date.now() + options.startupTimeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + options.startupTimeoutMs;
   let lastError: unknown = null;
 
   while (Date.now() < deadline) {
@@ -211,6 +212,7 @@ const waitForAgentReady = async (options: {
     try {
       await waitForAbortable(options.client.health(), options.signal);
       options.signal?.throwIfAborted();
+      xctestAgentLogger.info('XCTest agent ready after %d ms (fork-only experiment)', Date.now() - startedAt);
       return;
     } catch (error) {
       lastError = error;
