@@ -83,6 +83,7 @@ import {
 } from './diagnostics/index.js';
 import { resolveHarnessMetroPort } from './metro-port.js';
 import { getAdditionalCliArgs } from './cli-args.js';
+import { createHarnessContext } from './harness-context.js';
 import {
   logMetroCacheReused,
   logMetroPortFallback,
@@ -622,7 +623,7 @@ export const createHarnessSession = async (
     const getCurrentRunId = () => currentRun?.runId;
     const clientLogCollector = createClientLogCollector();
 
-    const context: HarnessContext = { platform };
+    const context = createHarnessContext(platform, globalConfig);
     const crashArtifactWriter = createCrashArtifactWriter({
       runnerName: platform.name,
       platformId: platform.platformId,
