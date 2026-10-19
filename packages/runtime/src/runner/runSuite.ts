@@ -14,8 +14,9 @@ import { runHooks, type HookType } from './hooks.js';
 import { getTestExecutionError } from './errors.js';
 import { ActiveTestContext, TestRunnerContext } from './types.js';
 import {
-  getPendingPromises,
   omitPromiseFromTracking,
+  openPendingPromiseWindow,
+  type PromiseTrackerTestContext,
   runWithoutPromiseTracking,
   type TrackedPromiseRecord,
   withPromiseTrackerTestContext,
@@ -117,23 +118,31 @@ const getTestTimeout = (context: TestRunnerContext): number => {
 const withRuntimeTimeout = async <T>(
   work: () => Promise<T>,
   options: {
-    createTimeoutError: () => Error;
+    belongsToWindow: (test: PromiseTrackerTestContext) => boolean;
+    createTimeoutError: (pendingPromises: TrackedPromiseRecord[]) => Error;
     timeout: number;
   },
 ): Promise<T> => {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
-  const timeoutPromise = runWithoutPromiseTracking(
-    () =>
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(options.createTimeoutError());
-        }, options.timeout);
-      }),
+  const pendingPromiseWindow = openPendingPromiseWindow(
+    options.belongsToWindow,
   );
-  const workPromise = work();
 
   try {
+    const timeoutPromise = runWithoutPromiseTracking(
+      () =>
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(
+              options.createTimeoutError(
+                pendingPromiseWindow.getPendingPromises(),
+              ),
+            );
+          }, options.timeout);
+        }),
+    );
+    const workPromise = work();
+
     return await runWithoutPromiseTracking(() =>
       Promise.race([workPromise, timeoutPromise]),
     );
@@ -141,6 +150,7 @@ const withRuntimeTimeout = async <T>(
     if (timeoutId) {
       clearTimeout(timeoutId);
     }
+    pendingPromiseWindow.close();
   }
 };
 
@@ -151,27 +161,20 @@ const withTestTimeout = async <T>(
     fullName: string;
     timeout: number;
   },
-): Promise<T> => {
-  const getMatchingPendingPromises = () =>
-    getPendingPromises().filter(
-      (promise) =>
-        promise.test?.file === options.file &&
-        promise.test.fullName === options.fullName &&
-        (promise.test.phase === 'beforeEach' ||
-          promise.test.phase === 'test' ||
-          promise.test.phase === 'afterEach'),
-    );
-
-  return await withRuntimeTimeout(work, {
+): Promise<T> =>
+  await withRuntimeTimeout(work, {
     timeout: options.timeout,
-    createTimeoutError: () =>
+    belongsToWindow: (test) =>
+      test.file === options.file &&
+      test.fullName === options.fullName &&
+      (test.phase === 'beforeEach' ||
+        test.phase === 'test' ||
+        test.phase === 'afterEach'),
+    createTimeoutError: (pendingPromises) =>
       new TestCaseTimeoutError(options.fullName, options.timeout, {
-        pendingPromises: getPendingPromiseDiagnostics(
-          getMatchingPendingPromises(),
-        ),
+        pendingPromises: getPendingPromiseDiagnostics(pendingPromises),
       }),
   });
-};
 
 const withSuiteHookTimeout = async (
   work: () => Promise<void>,
@@ -181,33 +184,21 @@ const withSuiteHookTimeout = async (
     suiteName: string;
     timeout: number;
   },
-): Promise<void> => {
-  const getMatchingPendingPromises = () =>
-    getPendingPromises().filter(
-      (promise) =>
-        promise.test?.file === options.file &&
-        promise.test.suite === options.suiteName &&
-        promise.test.phase === options.hookType,
-    );
-
-  return await withRuntimeTimeout(
-    work,
-    {
-      timeout: options.timeout,
-      createTimeoutError: () =>
-        new SuiteHookTimeoutError(
-          options.hookType,
-          options.suiteName,
-          options.timeout,
-          {
-            pendingPromises: getPendingPromiseDiagnostics(
-              getMatchingPendingPromises(),
-            ),
-          },
-        ),
-    },
-  );
-};
+): Promise<void> =>
+  await withRuntimeTimeout(work, {
+    timeout: options.timeout,
+    belongsToWindow: (test) =>
+      test.file === options.file &&
+      test.suite === options.suiteName &&
+      test.phase === options.hookType,
+    createTimeoutError: (pendingPromises) =>
+      new SuiteHookTimeoutError(
+        options.hookType,
+        options.suiteName,
+        options.timeout,
+        { pendingPromises: getPendingPromiseDiagnostics(pendingPromises) },
+      ),
+  });
 
 const emitTestFinished = (
   context: TestRunnerContext,
