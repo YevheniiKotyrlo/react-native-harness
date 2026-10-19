@@ -1,5 +1,6 @@
 import { access, readFile } from 'node:fs/promises';
-import type { AndroidSystemImageArch } from './environment.js';
+import path from 'node:path';
+import { getAvdHome, type AndroidSystemImageArch } from './environment.js';
 import type { AndroidEmulator, AndroidEmulatorAVDConfig } from './config.js';
 import { getEmulatorCpuCores } from './emulator-startup.js';
 
@@ -17,13 +18,15 @@ export type AvdCompatibilityResult =
   | { compatible: false; reason: string };
 
 export const getAvdDirectory = (name: string): string => {
-  return `${
-    process.env.ANDROID_AVD_HOME ?? `${process.env.HOME}/.android/avd`
-  }/${name}.avd`;
+  return path.join(getAvdHome(), `${name}.avd`);
+};
+
+export const getAvdIniPath = (name: string): string => {
+  return path.join(getAvdHome(), `${name}.ini`);
 };
 
 export const getAvdConfigPath = (name: string): string => {
-  return `${getAvdDirectory(name)}/config.ini`;
+  return path.join(getAvdDirectory(name), 'config.ini');
 };
 
 const normalizeAvdValue = (value: string | undefined): string | undefined => {

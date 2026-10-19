@@ -4,6 +4,7 @@ import { createWriteStream } from 'node:fs';
 import { access, cp, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import https from 'node:https';
 
@@ -54,10 +55,6 @@ const pathExists = async (filePath: string): Promise<boolean> => {
   } catch {
     return false;
   }
-};
-
-const quoteShell = (value: string): string => {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 };
 
 const downloadText = async (url: string): Promise<string> => {
@@ -217,18 +214,23 @@ const ensureAndroidCommandLineTools = async (
   }
 };
 
-const acceptAndroidLicenses = async (sdkRoot: string): Promise<void> => {
-  const sdkManagerBinaryPath = getSdkManagerBinaryPath(sdkRoot);
+function* answerYes(): Generator<string> {
+  for (;;) {
+    yield 'y\n';
+  }
+}
 
-  await spawn(
-    'bash',
-    [
-      '-lc',
-      `yes | ${quoteShell(sdkManagerBinaryPath)} --sdk_root=${quoteShell(
-        sdkRoot,
-      )} --licenses >/dev/null`,
-    ],
+// sdkmanager asks before every license it has no record of accepting; like
+// `yes`, the answers run until it exits.
+const runSdkManager = async (
+  sdkRoot: string,
+  args: readonly string[],
+): Promise<void> => {
+  const sdkManager = spawn(
+    getSdkManagerBinaryPath(sdkRoot),
+    [`--sdk_root=${sdkRoot}`, ...args],
     {
+      stdin: 'pipe',
       env: getAndroidProcessEnv({
         ...process.env,
         ANDROID_HOME: sdkRoot,
@@ -236,6 +238,13 @@ const acceptAndroidLicenses = async (sdkRoot: string): Promise<void> => {
       }),
     },
   );
+  const { stdin } = await sdkManager.nodeChildProcess;
+
+  if (stdin) {
+    void pipeline(Readable.from(answerYes()), stdin).catch(() => undefined);
+  }
+
+  await sdkManager;
 };
 
 const getPackageVerificationPath = (
@@ -296,33 +305,13 @@ const installAndroidSdkPackages = async (
     return;
   }
 
-  const sdkManagerBinaryPath = getSdkManagerBinaryPath(sdkRoot);
-  const packageArgs = packages
-    .map((packageName) => quoteShell(packageName))
-    .join(' ');
-
   androidEnvironmentLogger.info(
     'Installing missing Android SDK packages: %s',
     packages.join(', '),
   );
 
-  await acceptAndroidLicenses(sdkRoot);
-  await spawn(
-    'bash',
-    [
-      '-lc',
-      `yes | ${quoteShell(sdkManagerBinaryPath)} --sdk_root=${quoteShell(
-        sdkRoot,
-      )} ${packageArgs}`,
-    ],
-    {
-      env: getAndroidProcessEnv({
-        ...process.env,
-        ANDROID_HOME: sdkRoot,
-        ANDROID_SDK_ROOT: sdkRoot,
-      }),
-    },
-  );
+  await runSdkManager(sdkRoot, ['--licenses']);
+  await runSdkManager(sdkRoot, packages);
 };
 
 export const getAndroidSdkRoot = (
@@ -537,10 +526,13 @@ export const getAndroidProcessEnv = (
     ...env,
     ANDROID_HOME: sdkRoot,
     ANDROID_SDK_ROOT: sdkRoot,
-    ANDROID_AVD_HOME: path.join(os.homedir(), '.android', 'avd'),
+    ANDROID_AVD_HOME: getAvdHome(env),
     PATH: pathEntries.join(path.delimiter),
   };
 };
+
+export const getAvdHome = (env: NodeJS.ProcessEnv = process.env): string =>
+  env.ANDROID_AVD_HOME ?? path.join(os.homedir(), '.android', 'avd');
 
 export const initializeAndroidProcessEnv = (): void => {
   Object.assign(process.env, getAndroidProcessEnv());
