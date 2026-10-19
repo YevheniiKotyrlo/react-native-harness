@@ -30,7 +30,7 @@ import {
   shouldRunHarnessTestFile,
 } from './test-file-platform-filter.js';
 import { formatHarnessErrorMessage } from './format-harness-error.js';
-import { logger } from '@react-native-harness/tools';
+import { logger, toPosixPath } from '@react-native-harness/tools';
 import {
   appendStepSummary,
   printSummary,
@@ -153,7 +153,7 @@ export const executeRun = async (
   const startTime = Date.now();
   const watchMode = globalConfig.watch || globalConfig.watchAll;
   const rootDir = globalConfig.rootDir ?? process.cwd();
-  const testFiles = tests.map((t) => path.relative(rootDir, t.path));
+  const testFiles = tests.map((t) => toPosixPath(path.relative(rootDir, t.path)));
   const summary = createRunSummary();
   let caseEventChain = Promise.resolve();
   const unsubscribe = session.onTestRunnerEvent((event) => {
@@ -217,7 +217,7 @@ export const executeRun = async (
     for (const test of tests) {
       if (watcher.isInterrupted()) throw new CancelRun();
 
-      const relativeTestPath = path.relative(rootDir, test.path);
+      const relativeTestPath = toPosixPath(path.relative(rootDir, test.path));
       const fileStartedAt = Date.now();
       let emittedTestFileFinished = false;
 

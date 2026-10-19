@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { logger } from '@react-native-harness/tools';
+import { logger, toPosixPath } from '@react-native-harness/tools';
 
 const cacheLogger = logger.child('cache');
 
@@ -130,10 +130,7 @@ const collectKeyFiles = (
       }
 
       matches.push({
-        relativePath: path
-          .relative(repoRoot, fullPath)
-          .split(path.sep)
-          .join('/'),
+        relativePath: toPosixPath(path.relative(repoRoot, fullPath)),
         content: fs.readFileSync(fullPath),
       });
     }

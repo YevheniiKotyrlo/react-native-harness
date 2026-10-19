@@ -5,6 +5,7 @@ import type {
   TestSuiteResult as HarnessTestSuiteResult,
   TestResult as HarnessTestResult,
 } from '@react-native-harness/bridge';
+import { toPosixPath } from '@react-native-harness/tools';
 import type { HarnessSession } from './harness-session.js';
 import { formatResultsErrors } from 'jest-message-util';
 import { toTestResult } from './toTestResult.js';
@@ -91,14 +92,16 @@ export const runHarnessTestFile: RunHarnessTestFile = async ({
   session,
 }) => {
   const start = Date.now();
-  const relativeTestPath = path.relative(globalConfig.rootDir, testPath);
+  const relativeTestPath = toPosixPath(
+    path.relative(globalConfig.rootDir, testPath)
+  );
 
   // Extract setup files from Jest config and convert to relative paths
   const setupFiles = projectConfig.setupFiles?.map((setupFile) =>
-    path.relative(globalConfig.rootDir, setupFile)
+    toPosixPath(path.relative(globalConfig.rootDir, setupFile))
   );
   const setupFilesAfterEnv = projectConfig.setupFilesAfterEnv?.map(
-    (setupFile) => path.relative(globalConfig.rootDir, setupFile)
+    (setupFile) => toPosixPath(path.relative(globalConfig.rootDir, setupFile))
   );
   const testTimeout =
     session.config.testTimeout ??

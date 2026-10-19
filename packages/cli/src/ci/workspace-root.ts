@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { toPosixPath } from '@react-native-harness/tools';
 
 /**
  * The workspace root that INPUT_PROJECTROOT and the emitted `projectRoot`
@@ -41,4 +42,4 @@ export const resolveProjectRoot = (
  * `apps\foo` there.
  */
 export const relativeToWorkspaceRoot = (target: string): string =>
-  (path.relative(getWorkspaceRoot(), target) || '.').split(path.sep).join('/');
+  toPosixPath(path.relative(getWorkspaceRoot(), target) || '.');

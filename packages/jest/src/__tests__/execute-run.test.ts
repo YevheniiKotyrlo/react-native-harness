@@ -1,5 +1,4 @@
-import path from 'node:path';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import type { Config, Test, TestWatcher } from 'jest-runner';
 import type { TestResult as JestTestResult } from '@jest/test-result';
 import type {
@@ -182,6 +181,44 @@ describe('executeRun', () => {
       expect(hookNames[hookNames.length - 1]).toBe('run:finished');
     });
 
+    describe('on a Windows host', () => {
+      afterEach(() => {
+        vi.doUnmock('node:path');
+        vi.resetModules();
+      });
+
+      it('names test files with forward slashes in the run state and the file hooks', async () => {
+        vi.resetModules();
+        vi.doMock('node:path', async (importOriginal) => {
+          const { win32 } = await importOriginal<typeof import('node:path')>();
+          return { ...win32, default: win32 };
+        });
+        const { executeRun: executeRunOnWindows } = await import('../execute-run.js');
+        const hookCalls: Array<[string, unknown]> = [];
+        const session = makeSession({
+          callHook: vi.fn(async (name, payload) => {
+            hookCalls.push([name as string, payload]);
+          }),
+        });
+
+        await executeRunOnWindows(
+          session,
+          [makeTest('C:\\project\\src\\__tests__\\smoke.harness.ts')],
+          makeWatcher(),
+          makeEmitEvent().emitEvent,
+          makeGlobalConfig({ rootDir: 'C:\\project' }),
+        );
+
+        expect(session.setRunState).toHaveBeenCalledWith(
+          expect.objectContaining({ testFiles: ['src/__tests__/smoke.harness.ts'] }),
+        );
+        expect(hookCalls).toContainEqual([
+          'test-file:started',
+          expect.objectContaining({ file: 'src/__tests__/smoke.harness.ts' }),
+        ]);
+      });
+    });
+
     it('emits test-file:started and test-file:finished around each test', async () => {
       const hookNames: string[] = [];
       const session = makeSession({
@@ -236,8 +273,7 @@ describe('executeRun', () => {
       expect(runEntry?.attrs?.runId).toBeTypeOf('string');
       expect(fileEntry).toMatchObject({
         status: 'ok',
-        // path.relative('/project', '/a.ts') -- OS-separated, so `..\a.ts` on Windows.
-        attrs: { file: path.join('..', 'a.ts'), status: 'passed' },
+        attrs: { file: '../a.ts', status: 'passed' },
       });
       expect(fileEntry?.attrs?.runId).toBeTypeOf('string');
       expect(mockWriteTraceFile).toHaveBeenCalledWith(entries, expect.objectContaining({ runId: expect.any(String) }));
@@ -284,7 +320,7 @@ describe('executeRun', () => {
 
       await executeRun(session, [makeTest('/a.ts')], makeWatcher(), makeEmitEvent().emitEvent, makeGlobalConfig());
 
-      const file = path.join('..', 'a.ts');
+      const file = '../a.ts';
       expect(phases).toEqual([
         ['run.start', { runId: expect.any(String) }],
         ['test-file.start', { file }],
