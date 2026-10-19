@@ -154,6 +154,7 @@ export const getMetroInstance = async (
     .use('/status', getStatusMiddleware(projectRoot));
 
   const ready = waitForBundler(reporter, abortSignal);
+  void ready.catch(() => undefined);
   if (metroBindHost) {
     metroLogger.debug('binding Metro server to host %s', metroBindHost);
   }
