@@ -176,8 +176,8 @@ const ensureAndroidCommandLineTools = async (
   platform: NodeJS.Platform = process.platform,
 ): Promise<void> => {
   if (
-    (await pathExists(getSdkManagerBinaryPath(sdkRoot))) &&
-    (await pathExists(getAvdManagerBinaryPath(sdkRoot)))
+    (await pathExists(getSdkManagerBinaryPath(sdkRoot, platform))) &&
+    (await pathExists(getAvdManagerBinaryPath(sdkRoot, platform)))
   ) {
     return;
   }
@@ -241,13 +241,14 @@ const acceptAndroidLicenses = async (sdkRoot: string): Promise<void> => {
 const getPackageVerificationPath = (
   sdkRoot: string,
   packageName: string,
+  platform: NodeJS.Platform,
 ): string | null => {
   if (packageName === 'platform-tools') {
-    return getAdbBinaryPath(sdkRoot);
+    return getAdbBinaryPath(sdkRoot, platform);
   }
 
   if (packageName === 'emulator') {
-    return getEmulatorBinaryPath(sdkRoot);
+    return getEmulatorBinaryPath(sdkRoot, platform);
   }
 
   if (packageName.startsWith('platforms;android-')) {
@@ -264,11 +265,16 @@ const getPackageVerificationPath = (
 const getMissingAndroidSdkPackages = async (
   sdkRoot: string,
   packages: readonly string[],
+  platform: NodeJS.Platform,
 ): Promise<string[]> => {
   const missingPackages: string[] = [];
 
   for (const packageName of packages) {
-    const verificationPath = getPackageVerificationPath(sdkRoot, packageName);
+    const verificationPath = getPackageVerificationPath(
+      sdkRoot,
+      packageName,
+      platform,
+    );
 
     if (!verificationPath) {
       continue;
@@ -407,7 +413,11 @@ const getMissingAndroidSdkPackagesForEnvironment = async (
 
   return {
     sdkRoot,
-    missingPackages: await getMissingAndroidSdkPackages(sdkRoot, packages),
+    missingPackages: await getMissingAndroidSdkPackages(
+      sdkRoot,
+      packages,
+      platform,
+    ),
   };
 };
 
@@ -437,6 +447,7 @@ export const ensureAndroidSdkPackages = async (
   const unresolvedPackages = await getMissingAndroidSdkPackages(
     sdkRoot,
     packages,
+    platform,
   );
 
   if (unresolvedPackages.length > 0) {
@@ -535,20 +546,44 @@ export const initializeAndroidProcessEnv = (): void => {
   Object.assign(process.env, getAndroidProcessEnv());
 };
 
+const getExecutableFileName = (
+  name: string,
+  platform: NodeJS.Platform,
+): string => (platform === 'win32' ? `${name}.exe` : name);
+
+const getScriptFileName = (name: string, platform: NodeJS.Platform): string =>
+  platform === 'win32' ? `${name}.bat` : name;
+
 export const getAdbBinaryPath = (
   sdkRoot: string = getRequiredAndroidSdkRoot(),
-): string => path.join(sdkRoot, 'platform-tools', 'adb');
+  platform: NodeJS.Platform = process.platform,
+): string =>
+  path.join(sdkRoot, 'platform-tools', getExecutableFileName('adb', platform));
 
 export const getEmulatorBinaryPath = (
   sdkRoot: string = getRequiredAndroidSdkRoot(),
-): string => path.join(sdkRoot, 'emulator', 'emulator');
+  platform: NodeJS.Platform = process.platform,
+): string =>
+  path.join(sdkRoot, 'emulator', getExecutableFileName('emulator', platform));
 
 export const getSdkManagerBinaryPath = (
   sdkRoot: string = getRequiredAndroidSdkRoot(),
+  platform: NodeJS.Platform = process.platform,
 ): string =>
-  path.join(sdkRoot, ...CMDLINE_TOOLS_PATH_SEGMENTS, 'bin', 'sdkmanager');
+  path.join(
+    sdkRoot,
+    ...CMDLINE_TOOLS_PATH_SEGMENTS,
+    'bin',
+    getScriptFileName('sdkmanager', platform),
+  );
 
 export const getAvdManagerBinaryPath = (
   sdkRoot: string = getRequiredAndroidSdkRoot(),
+  platform: NodeJS.Platform = process.platform,
 ): string =>
-  path.join(sdkRoot, ...CMDLINE_TOOLS_PATH_SEGMENTS, 'bin', 'avdmanager');
+  path.join(
+    sdkRoot,
+    ...CMDLINE_TOOLS_PATH_SEGMENTS,
+    'bin',
+    getScriptFileName('avdmanager', platform),
+  );
