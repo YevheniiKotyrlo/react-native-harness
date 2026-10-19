@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CustomResolutionContext } from 'metro-resolver';
 import type { MetroConfig } from 'metro-config';
@@ -36,6 +37,8 @@ const enhancerContext = {
   platformId: 'vega',
   platformConfig: {},
 };
+
+const packageJsonPath = path.join(enhancerContext.projectRoot, 'package.json');
 
 const baseConfig = (overrides?: Partial<MetroConfig>): MetroConfig =>
   ({
@@ -168,7 +171,7 @@ describe('vega metroConfigEnhancer', () => {
         throw new Error('not resolvable');
       });
       requireModule.mockImplementation((specifier) => {
-        if (specifier === '/tmp/app/package.json') return pkg;
+        if (specifier === packageJsonPath) return pkg;
         if (specifier === utilsPath) return { applySystemBundleConfig };
         throw new Error('not found');
       });
@@ -205,7 +208,7 @@ describe('vega metroConfigEnhancer', () => {
 
     it('falls back to a regular bundle when the Vega CLI plugin is not installed', () => {
       requireModule.mockImplementation((specifier) => {
-        if (specifier === '/tmp/app/package.json') return { kepler: {} };
+        if (specifier === packageJsonPath) return { kepler: {} };
         throw new Error('not found');
       });
 
