@@ -12,6 +12,39 @@ export type RunCommandOptions = Omit<
 };
 const spawnLogger = logger.child('spawn');
 
+const FAILURE_OUTPUT_TAIL_LINES = 20;
+
+const describeFailureOutput = (output: string): string[] => {
+  const lines = output.split(/\r\n|\r|\n/).filter((line) => line.trim() !== '');
+  const tail = lines.slice(-FAILURE_OUTPUT_TAIL_LINES);
+  const earlierLineCount = lines.length - tail.length;
+
+  return earlierLineCount > 0
+    ? [`[${earlierLineCount} earlier lines]`, ...tail]
+    : tail;
+};
+
+// nano-spawn's message names only the command, and the message is what Jest prints.
+const rethrowWithOutput = (error: unknown): never => {
+  if (!(error instanceof SubprocessError)) {
+    throw error;
+  }
+
+  const outputLines = describeFailureOutput(error.output);
+
+  if (outputLines.length === 0) {
+    throw error;
+  }
+
+  throw Object.assign(
+    new SubprocessError(
+      [error.message, ...outputLines].join('\n'),
+      'cause' in error ? { cause: error.cause } : undefined
+    ),
+    error
+  );
+};
+
 let signalsDeliverableEnsured = false;
 
 /**
@@ -45,7 +78,15 @@ export const spawn = (
   };
   const command = [file, ...(args ?? [])].join(' ');
   spawnLogger.debug('running command: %s', command);
-  return nanoSpawn(file, args, { ...defaultOptions, ...options });
+  const subprocess = nanoSpawn(file, args, { ...defaultOptions, ...options });
+
+  return Object.assign(subprocess.catch(rethrowWithOutput), {
+    nodeChildProcess: subprocess.nodeChildProcess,
+    stdout: subprocess.stdout,
+    stderr: subprocess.stderr,
+    pipe: subprocess.pipe,
+    [Symbol.asyncIterator]: subprocess[Symbol.asyncIterator],
+  });
 };
 
 /**
