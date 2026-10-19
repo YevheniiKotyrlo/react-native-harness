@@ -3,7 +3,11 @@ import { ssim } from 'ssim.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { PNG } from 'pngjs';
-import type { FileReference, ImageSnapshotOptions } from './shared.js';
+import type {
+  FileReference,
+  ImageSnapshotOptions,
+  SnapshotUpdateState,
+} from './shared.js';
 
 type PixelmatchOptions = Parameters<typeof pixelmatch>[5];
 
@@ -49,7 +53,8 @@ export const matchImageSnapshot = async (
   screenshot: FileReference,
   testFilePath: string,
   options: ImageSnapshotOptions,
-  platformName: string
+  platformName: string,
+  updateSnapshot: SnapshotUpdateState
 ) => {
   const pixelmatchOptions = {
     ...DEFAULT_OPTIONS_FOR_PIXELMATCH,
@@ -77,6 +82,16 @@ export const matchImageSnapshot = async (
   try {
     await fs.access(snapshotPath);
   } catch {
+    if (updateSnapshot === 'none') {
+      const actualFileName = `${snapshotName.replace('.png', '')}-actual.png`;
+      const actualPath = path.join(snapshotsDir, actualFileName);
+      await fs.writeFile(actualPath, receivedBuffer);
+      return {
+        pass: false,
+        message: `New snapshot was not written: ${snapshotPath} does not exist, and missing snapshots are not written in CI mode. Received image saved at ${actualPath}.`,
+      };
+    }
+
     // First time - create snapshot
     await fs.writeFile(snapshotPath, receivedBuffer);
     return {
