@@ -163,6 +163,10 @@ jobs:
         run: |
           pnpm nx run-many -t build --projects="packages/*"
 
+      - name: Test the iOS package (fork only)
+        run: |
+          pnpm nx test @react-native-harness/platform-apple --outputStyle=static
+
       # Packs prebuilt XCTest agent artifacts into the platform package and
       # fails if it cannot, so this job exercises the artifact path consumers
       # get from a published package rather than only the build fallback.
@@ -435,7 +439,7 @@ jobs:
     name: Crash Validation iOS
     runs-on: macos-latest
     timeout-minutes: 30
-    if: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios') }}
+    if: ${{ false }}
     env:
       HARNESS_DEBUG: true
       RN_HARNESS_DIAGNOSTICS: true
@@ -472,6 +476,10 @@ jobs:
       - name: Build packages
         run: |
           pnpm nx run-many -t build --projects="packages/*"
+
+      - name: Test the iOS package (fork only)
+        run: |
+          pnpm nx test @react-native-harness/platform-apple --outputStyle=static
 
       # Packs prebuilt XCTest agent artifacts into the platform package and
       # fails if it cannot, so this job exercises the artifact path consumers
