@@ -1,6 +1,14 @@
-pluginManagement { includeBuild("../../../node_modules/@react-native/gradle-plugin") }
+pluginManagement {
+  includeBuild(new File(providers.exec {
+    workingDir(rootDir)
+    commandLine("node", "--print", "require.resolve('@react-native/gradle-plugin/package.json', { paths: [require.resolve('react-native/package.json')] })")
+  }.standardOutput.asText.get().trim()).parentFile.absolutePath)
+}
 plugins { id("com.facebook.react.settings") }
 extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
 rootProject.name = 'HarnessPlayground'
 include ':app'
-includeBuild('../../../node_modules/@react-native/gradle-plugin')
+includeBuild(new File(providers.exec {
+  workingDir(rootDir)
+  commandLine("node", "--print", "require.resolve('@react-native/gradle-plugin/package.json', { paths: [require.resolve('react-native/package.json')] })")
+}.standardOutput.asText.get().trim()).parentFile.absolutePath)
