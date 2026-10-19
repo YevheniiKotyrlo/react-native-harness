@@ -25,13 +25,36 @@ const pendingPromises = new Map<number, TrackedPromiseRecord>();
 const promiseIds = new WeakMap<object, number>();
 const promiseContexts = new WeakMap<object, PromiseTrackerTestContext>();
 
-// A garbage-collected promise can never settle or hold anything pending, so drop
-// its record (and captured stack) instead of leaking it. Primary defense; the
-// size cap above covers the window before GC runs.
+type PendingPromiseWindowMembership = (
+  test: PromiseTrackerTestContext
+) => boolean;
+
+const openWindows = new Set<PendingPromiseWindowMembership>();
+const collectedPromiseIds = new Set<number>();
+
+const isInOpenWindow = (record: TrackedPromiseRecord): boolean => {
+  const { test } = record;
+
+  return (
+    test !== undefined &&
+    [...openWindows].some((belongsToWindow) => belongsToWindow(test))
+  );
+};
+
+// A collected promise can never settle, so its record goes, unless a test that
+// can still time out created it: a promise nobody can resolve is what such a
+// test waits on, and closing the test's window releases the record instead.
 const promiseFinalization =
   typeof FinalizationRegistry === 'undefined'
     ? null
     : new FinalizationRegistry<number>((id) => {
+        const record = pendingPromises.get(id);
+
+        if (record && isInOpenWindow(record)) {
+          collectedPromiseIds.add(id);
+          return;
+        }
+
         pendingPromises.delete(id);
       });
 
@@ -389,12 +412,15 @@ export const uninstallPromiseTracker = (): void => {
   globalThis.Promise = originalPromise;
   originalPromise = null;
   pendingPromises.clear();
+  openWindows.clear();
+  collectedPromiseIds.clear();
   // WeakMap entries are released with their promises.
   currentTestContext = undefined;
 };
 
 export const clearTrackedPromises = (): void => {
   pendingPromises.clear();
+  collectedPromiseIds.clear();
 };
 
 export const getPendingPromises = (): TrackedPromiseRecord[] => {
@@ -402,6 +428,41 @@ export const getPendingPromises = (): TrackedPromiseRecord[] => {
     ...record,
     test: record.test ? { ...record.test } : undefined,
   }));
+};
+
+export type PendingPromiseWindow = {
+  getPendingPromises: () => TrackedPromiseRecord[];
+  close: () => void;
+};
+
+/**
+ * Lists the pending promises a test or hook created while it can still time
+ * out, those collected meanwhile included, and releases the collected ones
+ * when it closes.
+ */
+export const openPendingPromiseWindow = (
+  belongsToWindow: PendingPromiseWindowMembership
+): PendingPromiseWindow => {
+  const isInWindow = (record: TrackedPromiseRecord): boolean =>
+    record.test !== undefined && belongsToWindow(record.test);
+
+  openWindows.add(belongsToWindow);
+
+  return {
+    getPendingPromises: () => getPendingPromises().filter(isInWindow),
+    close: () => {
+      openWindows.delete(belongsToWindow);
+
+      for (const id of collectedPromiseIds) {
+        const record = pendingPromises.get(id);
+
+        if (!record || isInWindow(record)) {
+          pendingPromises.delete(id);
+          collectedPromiseIds.delete(id);
+        }
+      }
+    },
+  };
 };
 
 export const withPromiseTrackerTestContext = <T>(
