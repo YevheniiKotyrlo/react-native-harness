@@ -1,5 +1,5 @@
 import * as tools from '@react-native-harness/tools';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getDeviceConnectionHost,
   getDeviceCtlLaunchArgs,
@@ -13,6 +13,10 @@ import {
 } from '../xcrun/simctl.js';
 
 describe('Apple app launch options', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('maps simulator environment to SIMCTL_CHILD variables', () => {
     expect(
       getSimctlChildEnvironment({
@@ -51,9 +55,9 @@ describe('Apple app launch options', () => {
   });
 
   it('passes console mode to devicectl process launch streams', () => {
-    const spawnSpy = vi
-      .spyOn(tools, 'spawn')
-      .mockResolvedValue({} as Awaited<ReturnType<typeof tools.spawn>>);
+    const spawnOwnedProcessSpy = vi
+      .spyOn(tools, 'spawnOwnedProcess')
+      .mockReturnValue({} as ReturnType<typeof tools.spawnOwnedProcess>);
 
     launchDeviceAppProcess('device-id', 'com.example.app', {
       arguments: ['--mode=test'],
@@ -62,7 +66,7 @@ describe('Apple app launch options', () => {
       },
     });
 
-    expect(spawnSpy).toHaveBeenCalledWith(
+    expect(spawnOwnedProcessSpy).toHaveBeenCalledWith(
       'xcrun',
       [
         'devicectl',
@@ -90,6 +94,9 @@ describe('Apple app launch options', () => {
     const spawnSpy = vi
       .spyOn(tools, 'spawn')
       .mockResolvedValue({} as Awaited<ReturnType<typeof tools.spawn>>);
+    const spawnOwnedProcessSpy = vi
+      .spyOn(tools, 'spawnOwnedProcess')
+      .mockReturnValue({} as ReturnType<typeof tools.spawnOwnedProcess>);
 
     await startApp('sim-udid', 'com.example.app', {
       arguments: ['--mode=test'],
@@ -99,8 +106,8 @@ describe('Apple app launch options', () => {
       arguments: ['--mode=test'],
     });
 
-    expect(spawnSpy).toHaveBeenNthCalledWith(
-      1,
+    expect(spawnSpy).toHaveBeenCalledOnce();
+    expect(spawnSpy).toHaveBeenCalledWith(
       'xcrun',
       [
         'simctl',
@@ -115,8 +122,8 @@ describe('Apple app launch options', () => {
       },
     );
 
-    expect(spawnSpy).toHaveBeenNthCalledWith(
-      2,
+    expect(spawnOwnedProcessSpy).toHaveBeenCalledOnce();
+    expect(spawnOwnedProcessSpy).toHaveBeenCalledWith(
       'xcrun',
       [
         'simctl',

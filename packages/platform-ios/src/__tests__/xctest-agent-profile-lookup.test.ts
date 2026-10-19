@@ -20,6 +20,9 @@ import { findProvisioningProfile } from '../xctest-agent-resign.js';
 
 const teamId = 'TESTTEAM01';
 const device = '00008150-0000000000000000';
+// The profile's fields are read with plutil, which only macOS ships; elsewhere
+// every lookup declines, so the declines below would pass for that reason alone.
+const plutilAvailable = process.platform === 'darwin';
 
 // The profile's certificate list is matched against the signing identity, so a
 // known certificate whose fingerprint the test can compute keeps the keychain
@@ -95,7 +98,7 @@ beforeEach(() => {
   mocks.spawn.mockReset();
 });
 
-describe('a profile named by path', () => {
+describe.runIf(plutilAvailable)('a profile named by path', () => {
   it('is accepted when it lists the target device', async () => {
     const profile = writeProfile({ devices: [device] });
 

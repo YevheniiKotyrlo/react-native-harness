@@ -124,9 +124,9 @@ describe('iOS platform instance dependency validation', () => {
     };
 
     await expect(
-      getApplePhysicalDevicePlatformInstance(config, harnessConfig),
+      getApplePhysicalDevicePlatformInstance(config, harnessConfig, init),
     ).resolves.toBeDefined();
-    expect(getDevice).toHaveBeenCalledWith('My iPhone');
+    expect(getDevice).toHaveBeenCalledWith('My iPhone', init.signal);
   });
 
   it('does not start the physical-device XCTest agent when permissions are disabled', async () => {
