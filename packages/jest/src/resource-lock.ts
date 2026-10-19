@@ -44,6 +44,7 @@ type ResourceLockManagerOptions = {
   pid?: number;
   logger?: HarnessLogger;
   isProcessActive?: (pid: number) => boolean;
+  platform?: NodeJS.Platform;
 };
 
 type LockPaths = {
@@ -98,16 +99,32 @@ const isExclusiveCreateError = (error: unknown): boolean => {
   );
 };
 
+// Windows reports a file another process is deleting as EPERM until it is gone.
+const isFileBeingDeletedError = (
+  error: unknown,
+  platform: NodeJS.Platform,
+): boolean => {
+  return (
+    platform === 'win32' &&
+    error instanceof Error &&
+    'code' in error &&
+    error.code === 'EPERM'
+  );
+};
+
 const ensureLockDirectories = async (paths: LockPaths): Promise<void> => {
   await fs.mkdir(paths.queueDir, { recursive: true });
 };
 
-const readJsonFile = async <T>(filePath: string): Promise<T | null> => {
+const readJsonFile = async <T>(
+  filePath: string,
+  platform: NodeJS.Platform,
+): Promise<T | null> => {
   try {
     const content = await fs.readFile(filePath, 'utf8');
     return JSON.parse(content) as T;
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingFileError(error) || isFileBeingDeletedError(error, platform)) {
       return null;
     }
 
@@ -203,6 +220,7 @@ const waitForPollInterval = (
 
 const readQueueTickets = async (
   queueDir: string,
+  platform: NodeJS.Platform,
 ): Promise<ResourceLockMetadata[]> => {
   const ticketEntries = await fs.readdir(queueDir, { withFileTypes: true });
   const tickets = await Promise.all(
@@ -212,6 +230,7 @@ const readQueueTickets = async (
         name: entry.name,
         metadata: await readJsonFile<ResourceLockMetadata>(
           path.join(queueDir, entry.name),
+          platform,
         ),
       })),
   );
@@ -230,9 +249,10 @@ const cleanupQueue = async (options: {
   currentTicketId: string;
   logger: HarnessLogger;
   isProcessActive: (pid: number) => boolean;
+  platform: NodeJS.Platform;
 }): Promise<ResourceLockMetadata[]> => {
-  const { paths, currentTicketId, logger, isProcessActive } = options;
-  const tickets = await readQueueTickets(paths.queueDir);
+  const { paths, currentTicketId, logger, isProcessActive, platform } = options;
+  const tickets = await readQueueTickets(paths.queueDir, platform);
   const activeTickets: ResourceLockMetadata[] = [];
 
   for (const ticket of tickets) {
@@ -264,10 +284,20 @@ const maybeClearStaleOwner = async (options: {
   now: number;
   logger: HarnessLogger;
   isProcessActive: (pid: number) => boolean;
+  platform: NodeJS.Platform;
 }): Promise<ResourceLockMetadata | null> => {
-  const { ownerFilePath, staleLockTimeoutMs, now, logger, isProcessActive } =
-    options;
-  const owner = await readJsonFile<ResourceLockMetadata>(ownerFilePath);
+  const {
+    ownerFilePath,
+    staleLockTimeoutMs,
+    now,
+    logger,
+    isProcessActive,
+    platform,
+  } = options;
+  const owner = await readJsonFile<ResourceLockMetadata>(
+    ownerFilePath,
+    platform,
+  );
 
   if (!owner) {
     return null;
@@ -317,6 +347,7 @@ export const createResourceLockManager = (
   const pid = options.pid ?? process.pid;
   const scopedLogger = options.logger ?? resourceLockLogger;
   const isProcessActive = options.isProcessActive ?? isPidActive;
+  const platform = options.platform ?? process.platform;
 
   return {
     acquire: async (key, acquireOptions = {}) => {
@@ -338,7 +369,7 @@ export const createResourceLockManager = (
       scopedLogger.debug('queued ticket %s for key %s', ticketId, key);
 
       let heartbeatTimer: NodeJS.Timeout | null = null;
-      let heartbeatInFlight = false;
+      let heartbeatRefresh: Promise<void> | null = null;
       let released = false;
       let didNotifyWait = false;
       const waitStartedAt = Date.now();
@@ -354,8 +385,12 @@ export const createResourceLockManager = (
           heartbeatTimer = null;
         }
 
+        // A refresh already past its check would write the owner file back.
+        await heartbeatRefresh;
+
         const owner = await readJsonFile<ResourceLockMetadata>(
           paths.ownerFilePath,
+          platform,
         );
         if (owner?.ticketId === ticketId) {
           await removeFileIfPresent(paths.ownerFilePath);
@@ -365,51 +400,39 @@ export const createResourceLockManager = (
         scopedLogger.debug('released ticket %s for key %s', ticketId, key);
       };
 
-      const startHeartbeat = () => {
-        heartbeatTimer = setInterval(async () => {
-          if (heartbeatInFlight) {
+      const refreshHeartbeat = async (): Promise<void> => {
+        try {
+          const nextHeartbeatAt = Date.now();
+          const owner = await readJsonFile<ResourceLockMetadata>(
+            paths.ownerFilePath,
+            platform,
+          );
+
+          if (released || owner?.ticketId !== ticketId) {
             return;
           }
 
-          heartbeatInFlight = true;
+          await writeJsonFileAtomic(paths.ownerFilePath, {
+            ...owner,
+            heartbeatAt: nextHeartbeatAt,
+          });
+          scopedLogger.debug('refreshed heartbeat for ticket %s', ticketId);
+        } catch (error) {
+          // A failed refresh is not fatal: the lock goes stale and another
+          // holder reclaims it.
+          scopedLogger.debug(
+            'heartbeat refresh for ticket %s failed: %s',
+            ticketId,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      };
 
-          try {
-            const nextHeartbeatAt = Date.now();
-            const owner = await readJsonFile<ResourceLockMetadata>(
-              paths.ownerFilePath,
-            );
-
-            if (released || owner?.ticketId !== ticketId) {
-              return;
-            }
-
-            const nextMetadata: ResourceLockMetadata = {
-              ...owner,
-              heartbeatAt: nextHeartbeatAt,
-            };
-
-            if (released) {
-              return;
-            }
-
-            try {
-              await writeJsonFileAtomic(paths.ownerFilePath, nextMetadata);
-              scopedLogger.debug('refreshed heartbeat for ticket %s', ticketId);
-            } catch (error) {
-              // A failed refresh is not fatal by design: the lock goes stale
-              // and another holder reclaims it. Swallow it so a transient
-              // write error (e.g. the owner file racing a concurrent release,
-              // or an EPERM on Windows when the directory is being torn down)
-              // never surfaces as an unhandled rejection from this interval.
-              scopedLogger.debug(
-                'heartbeat refresh for ticket %s failed: %s',
-                ticketId,
-                error instanceof Error ? error.message : String(error),
-              );
-            }
-          } finally {
-            heartbeatInFlight = false;
-          }
+      const startHeartbeat = () => {
+        heartbeatTimer = setInterval(() => {
+          heartbeatRefresh ??= refreshHeartbeat().finally(() => {
+            heartbeatRefresh = null;
+          });
         }, heartbeatIntervalMs);
         heartbeatTimer.unref?.();
       };
@@ -424,6 +447,7 @@ export const createResourceLockManager = (
             currentTicketId: ticketId,
             logger: scopedLogger,
             isProcessActive,
+            platform,
           });
           const ownIndex = activeTickets.findIndex(
             (entry) => entry.ticketId === ticketId,
@@ -441,6 +465,7 @@ export const createResourceLockManager = (
             now,
             logger: scopedLogger,
             isProcessActive,
+            platform,
           });
 
           if (ownIndex === 0 && owner === null) {

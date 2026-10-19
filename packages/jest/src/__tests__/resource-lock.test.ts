@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { HarnessLogger } from '@react-native-harness/tools';
 import { createResourceLockManager } from '../resource-lock.js';
 
 describe('resource lock manager', () => {
@@ -177,3 +178,184 @@ describe('resource lock manager', () => {
 type ResourceLockOwner = {
   ticketId: string;
 };
+
+type Deferred = {
+  promise: Promise<void>;
+  resolve: () => void;
+};
+
+const createDeferred = (): Deferred => {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+
+  return { promise, resolve };
+};
+
+const createErrnoError = (code: string, filePath: string): Error =>
+  Object.assign(new Error(`${code}: operation failed, open '${filePath}'`), {
+    code,
+  });
+
+const readOwnerFilePath = async (rootDir: string): Promise<string> => {
+  const [keyDirName] = await fs.readdir(rootDir);
+  return path.join(rootDir, keyDirName, 'owner.json');
+};
+
+describe('resource lock manager under concurrent file changes', () => {
+  const key = 'android:emulator:Pixel_8_API_35';
+  let rootDir: string;
+
+  beforeEach(async () => {
+    rootDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'react-native-harness-resource-lock-test-'),
+    );
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    await fs.rm(rootDir, { recursive: true, force: true });
+  });
+
+  it('reads an owner file Windows reports as being deleted as gone', async () => {
+    const lockOptions = {
+      rootDir,
+      pollIntervalMs: 5,
+      heartbeatIntervalMs: 60_000,
+      staleLockTimeoutMs: 60_000,
+    };
+    const holder = createResourceLockManager(lockOptions);
+    const waiter = createResourceLockManager({ ...lockOptions, platform: 'win32' });
+    const heldLease = await holder.acquire(key);
+    const ownerFilePath = await readOwnerFilePath(rootDir);
+    const deletionReported = createDeferred();
+    const actualReadFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, 'readFile').mockImplementation(async (file, options) => {
+      if (file === ownerFilePath) {
+        deletionReported.resolve();
+        throw createErrnoError('EPERM', ownerFilePath);
+      }
+
+      return await actualReadFile(file, options);
+    });
+
+    const waiting = waiter.acquire(key);
+    await deletionReported.promise;
+    vi.mocked(fs.readFile).mockRestore();
+    await heldLease.release();
+
+    const waiterLease = await waiting;
+    await waiterLease.release();
+  });
+
+  it('keeps EPERM an error on other platforms', async () => {
+    const lockOptions = {
+      rootDir,
+      pollIntervalMs: 5,
+      heartbeatIntervalMs: 60_000,
+      staleLockTimeoutMs: 60_000,
+    };
+    const holder = createResourceLockManager(lockOptions);
+    const waiter = createResourceLockManager({ ...lockOptions, platform: 'linux' });
+    const heldLease = await holder.acquire(key);
+    const ownerFilePath = await readOwnerFilePath(rootDir);
+    const actualReadFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, 'readFile').mockImplementation(async (file, options) => {
+      if (file === ownerFilePath) {
+        throw createErrnoError('EPERM', ownerFilePath);
+      }
+
+      return await actualReadFile(file, options);
+    });
+
+    await expect(waiter.acquire(key)).rejects.toMatchObject({ code: 'EPERM' });
+    vi.mocked(fs.readFile).mockRestore();
+    await heldLease.release();
+  });
+
+  it('logs a heartbeat that cannot read the owner file instead of rejecting', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const refreshFailed = createDeferred();
+    const unhandledRejections: unknown[] = [];
+    const unhandledRejectionSeen = createDeferred();
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+      unhandledRejectionSeen.resolve();
+    };
+    const lockLogger = {
+      debug: vi.fn((message: string) => {
+        if (message.startsWith('heartbeat refresh')) {
+          refreshFailed.resolve();
+        }
+      }),
+    } as unknown as HarnessLogger;
+    const manager = createResourceLockManager({
+      rootDir,
+      heartbeatIntervalMs: 1_000,
+      staleLockTimeoutMs: 60_000,
+      logger: lockLogger,
+    });
+    const lease = await manager.acquire(key);
+    const ownerFilePath = await readOwnerFilePath(rootDir);
+    const actualReadFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, 'readFile').mockImplementation(async (file, options) => {
+      if (file === ownerFilePath) {
+        throw createErrnoError('EACCES', ownerFilePath);
+      }
+
+      return await actualReadFile(file, options);
+    });
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    try {
+      vi.advanceTimersByTime(1_000);
+      await Promise.race([refreshFailed.promise, unhandledRejectionSeen.promise]);
+
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+      vi.mocked(fs.readFile).mockRestore();
+      await lease.release();
+    }
+  });
+
+  it('waits for a heartbeat in flight before it releases the owner file', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const manager = createResourceLockManager({
+      rootDir,
+      heartbeatIntervalMs: 1_000,
+      staleLockTimeoutMs: 60_000,
+    });
+    const lease = await manager.acquire(key);
+    const ownerFilePath = await readOwnerFilePath(rootDir);
+    const heartbeatWriting = createDeferred();
+    const heartbeatMayWrite = createDeferred();
+    const actualRename = fs.rename.bind(fs);
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (to === ownerFilePath) {
+        heartbeatWriting.resolve();
+        await heartbeatMayWrite.promise;
+      }
+
+      return await actualRename(from, to);
+    });
+    const readFileSpy = vi.spyOn(fs, 'readFile');
+
+    vi.advanceTimersByTime(1_000);
+    await heartbeatWriting.promise;
+    const readsBeforeRelease = readFileSpy.mock.calls.length;
+
+    const releasing = lease.release();
+
+    expect(readFileSpy.mock.calls.length).toBe(readsBeforeRelease);
+
+    heartbeatMayWrite.resolve();
+    await releasing;
+
+    await expect(fs.access(ownerFilePath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+});
