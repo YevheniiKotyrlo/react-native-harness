@@ -119,6 +119,14 @@ jobs:
           path: apps/playground/.harness/diagnostics
           if-no-files-found: ignore
 
+      - name: Upload image snapshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-snapshots-e2e-android
+          path: apps/playground/src/__tests__/normal/ui/__image_snapshots__
+          if-no-files-found: ignore
+
   e2e-ios:
     name: E2E iOS
     runs-on: macos-latest
@@ -236,6 +244,14 @@ jobs:
           path: apps/playground/.harness/diagnostics
           if-no-files-found: ignore
 
+      - name: Upload image snapshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-snapshots-e2e-ios
+          path: apps/playground/src/__tests__/normal/ui/__image_snapshots__
+          if-no-files-found: ignore
+
   e2e-web:
     name: E2E Web
     runs-on: ubuntu-22.04
@@ -294,6 +310,14 @@ jobs:
         with:
           name: harness-diagnostics-e2e-web
           path: apps/playground/.harness/diagnostics
+          if-no-files-found: ignore
+
+      - name: Upload image snapshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-snapshots-e2e-web
+          path: apps/playground/src/__tests__/normal/ui/__image_snapshots__
           if-no-files-found: ignore
 
   crash-validate-android:
