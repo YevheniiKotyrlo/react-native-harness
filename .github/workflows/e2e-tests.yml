@@ -403,6 +403,13 @@ jobs:
             echo "HARNESS_RUNNER=$HARNESS_RUNNER"
             echo "HARNESS_EXIT_CODE=$HARNESS_EXIT_CODE"
 
+      - name: Show the Android SDK state (fork only)
+        if: always()
+        run: |
+          df -h /
+          ls "$ANDROID_HOME/system-images/android-35" || true
+          { yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" 'system-images;android-35;default;x86_64'; echo "sdkmanager exit=${PIPESTATUS[1]}"; } 2>&1 | tail -n 40 || true
+
       - name: Verify crash was detected
         shell: bash
         run: |
