@@ -3,9 +3,11 @@ import { Dimensions, View } from 'react-native';
 import { screen } from '@react-native-harness/ui';
 
 import {
+  RootShiftView,
   SolidColorSurfaceView,
   SolidColorTextureView,
   SplitColorSurfaceView,
+  SplitColorVideoView,
 } from '../../../native/PaintedSurfaces';
 
 describe('Screenshot of views drawn on a surface of their own', () => {
@@ -109,6 +111,97 @@ describe('Screenshot of views drawn on a surface of their own', () => {
     const rightHalf = await screen.findByTestId('right-half');
     await expect(await screen.screenshot(rightHalf)).toMatchImageSnapshot({
       name: 'surface-view-right-half',
+    });
+  });
+
+  test('draws a SurfaceView under a fractional scale into the box the screen shows it in', async () => {
+    await render(
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <View
+          testID="fractionally-scaled-surface"
+          style={{ transform: [{ scale: 0.3 }] }}
+        >
+          <SplitColorSurfaceView style={{ width: 96, height: 96 }} />
+        </View>
+      </View>
+    );
+    await screen.findByAccessibilityLabel('split-surface-view-painted');
+
+    const scaledSurface = await screen.findByTestId(
+      'fractionally-scaled-surface'
+    );
+    await expect(await screen.screenshot(scaledSurface)).toMatchImageSnapshot({
+      name: 'surface-view-fractional-scale',
+    });
+  });
+
+  test('copies a video frame larger than its SurfaceView at the size the screen shows it', async () => {
+    await render(
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <SplitColorVideoView
+          testID="video-surface"
+          style={{ width: 96, height: 54 }}
+        />
+      </View>
+    );
+    await screen.findByAccessibilityLabel('split-video-painted');
+
+    const videoSurface = await screen.findByTestId('video-surface');
+    await expect(await screen.screenshot(videoSurface)).toMatchImageSnapshot({
+      name: 'video-surface-view',
+    });
+  });
+
+  test('captures the window while a SurfaceView is scaled to nothing', async () => {
+    await render(
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <View style={{ transform: [{ scale: 0 }] }}>
+          <SplitColorSurfaceView style={{ width: 96, height: 96 }} />
+        </View>
+      </View>
+    );
+    await screen.findByAccessibilityLabel('split-surface-view-painted');
+
+    expect(await screen.screenshot()).not.toBeNull();
+  });
+});
+
+describe('Screenshot of an element by the box it covers on the screen', () => {
+  test('draws an element scaled to nothing as the element draws itself', async () => {
+    await render(
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <View
+          testID="scaled-to-nothing"
+          style={{
+            width: 48,
+            height: 48,
+            backgroundColor: 'red',
+            transform: [{ scaleY: 0 }],
+          }}
+        />
+      </View>
+    );
+
+    const scaledToNothing = await screen.findByTestId('scaled-to-nothing');
+    await expect(await screen.screenshot(scaledToNothing)).toMatchImageSnapshot(
+      { name: 'element-scaled-to-nothing' }
+    );
+  });
+
+  test("captures an element where it is drawn when the window's root view moves", async () => {
+    await render(
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <RootShiftView rootTranslationY={40} />
+        <View
+          testID="under-moved-root"
+          style={{ width: 48, height: 48, backgroundColor: 'green' }}
+        />
+      </View>
+    );
+
+    const underMovedRoot = await screen.findByTestId('under-moved-root');
+    await expect(await screen.screenshot(underMovedRoot)).toMatchImageSnapshot({
+      name: 'element-under-moved-root',
     });
   });
 });

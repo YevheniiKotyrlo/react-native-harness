@@ -13,3 +13,11 @@ export const SolidColorSurfaceView = requireNativeComponent<ViewProps>(
 export const SplitColorSurfaceView = requireNativeComponent<ViewProps>(
   'SplitColorSurfaceView'
 );
+
+export const SplitColorVideoView = requireNativeComponent<ViewProps>(
+  'SplitColorVideoView'
+);
+
+export const RootShiftView = requireNativeComponent<
+  ViewProps & { rootTranslationY: number }
+>('RootShiftView');
