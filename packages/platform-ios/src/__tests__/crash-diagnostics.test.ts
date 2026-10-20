@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createCrashArtifactWriter } from '@react-native-harness/tools';
 import { collectCrashArtifacts } from '../crash-diagnostics.js';
@@ -161,7 +161,9 @@ describe('collectCrashArtifacts', () => {
       }
     );
 
-    expect(artifacts[0]?.artifactPath).toContain('/.harness/crash-reports/');
+    expect(artifacts[0]?.artifactPath).toContain(
+      join(sep, '.harness', 'crash-reports', sep)
+    );
     expect(artifacts[0]?.artifactPath).toContain('test-native-crash.test.ts');
     expect(fs.existsSync(artifacts[0]?.artifactPath ?? '')).toBe(true);
   });
