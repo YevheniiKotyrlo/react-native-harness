@@ -3,7 +3,6 @@ package com.harnessui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
@@ -35,6 +34,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 /**
  * UI helper implementation for HarnessUI.
@@ -279,11 +279,11 @@ class UIHelperImpl(
                             val viewRect = rectInWindow(targetView)
                             val rootRect = Rect(0, 0, root.width, root.height)
 
-                            if (!viewRect.isEmpty && rootRect.contains(viewRect)) {
+                            if (rootRect.contains(viewRect)) {
                                 Log.i(TAG, "View $nativeId is fully on screen. Using screen-based screenshotting.")
                                 captureWindowRegion(window, viewRect, promise)
                             } else {
-                                Log.i(TAG, "View $nativeId is not fully on screen. Using direct view render.")
+                                Log.i(TAG, "View $nativeId is partially/fully off screen. Using direct view render.")
                                 val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                                 targetView.draw(Canvas(bitmap))
                                 promise.resolve(encodePng(bitmap))
@@ -346,16 +346,13 @@ class UIHelperImpl(
 
         val surfaceViews =
             if (decorView.isShown) {
-                collectSurfaceViews(decorView).filter { surfaceView ->
-                    !surfaceView.rect.isEmpty && Rect.intersects(copiedRegion, surfaceView.rect)
-                }
+                collectSurfaceViews(decorView).filter { surfaceView -> Rect.intersects(copiedRegion, surfaceView.rect) }
             } else {
                 emptyList()
             }
         val windowPixels = Bitmap.createBitmap(copiedRegion.width(), copiedRegion.height(), Bitmap.Config.ARGB_8888)
         val surfaceLayers = arrayOfNulls<SurfaceLayer>(surfaceViews.size)
-        var windowSource = WindowSource.VIEW_TREE
-        var copyFailure: String? = null
+        var windowCopied = false
         var pendingCopies = surfaceViews.size + 1
 
         fun onCopyFinished() {
@@ -364,90 +361,66 @@ class UIHelperImpl(
                 return
             }
             val layers = surfaceLayers.filterNotNull()
-
-            fun abandon() {
+            try {
+                val screenshot =
+                    if (windowCopied) {
+                        placeInRegion(windowPixels, copiedRegion, region)
+                    } else {
+                        windowPixels.recycle()
+                        drawWindowRegion(window, region)
+                    }
+                drawBehind(screenshot, layers)
+                promise.resolve(encodePng(screenshot))
+            } catch (e: Exception) {
+                Log.e(TAG, "Screenshot capture failed", e)
                 windowPixels.recycle()
                 layers.forEach { layer -> layer.pixels.recycle() }
                 promise.resolve(null)
             }
-
-            val failure = copyFailure
-            if (failure != null) {
-                Log.e(TAG, "Screenshot capture failed: $failure")
-                abandon()
-                return
-            }
-            var screenshot: Bitmap? = null
-            try {
-                screenshot =
-                    when (windowSource) {
-                        WindowSource.COPY -> placeInRegion(windowPixels, copiedRegion, region)
-                        WindowSource.VIEW_TREE -> {
-                            windowPixels.recycle()
-                            drawWindowRegion(window, region)
-                        }
-                    }
-                drawBehind(screenshot, layers, Rect(copiedRegion).apply { offset(-region.left, -region.top) })
-                promise.resolve(encodePng(screenshot))
-            } catch (e: Exception) {
-                Log.e(TAG, "Screenshot capture failed", e)
-                screenshot?.recycle()
-                abandon()
-            }
         }
 
-        // Before Android 9, PixelCopy does not offset the rect it is given by the window's surface insets, which a
-        // window with elevation has, so such a window's view tree is drawn instead.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P && decorView.z > 0f) {
-            onCopyFinished()
-        } else {
-            try {
-                PixelCopy.request(window, Rect(copiedRegion), windowPixels, { windowResult ->
-                    if (windowResult == PixelCopy.SUCCESS) {
-                        windowSource = WindowSource.COPY
-                    } else {
-                        copyFailure = "PixelCopy of the window failed with result $windowResult"
-                    }
-                    onCopyFinished()
-                }, mainHandler)
-            } catch (e: IllegalArgumentException) {
-                Log.w(TAG, "PixelCopy cannot read the window, so it has no surface: drawing the view tree", e)
+        try {
+            // PixelCopy offsets the rect it is given by the window's surface insets.
+            PixelCopy.request(window, Rect(copiedRegion), windowPixels, { windowResult ->
+                windowCopied = windowResult == PixelCopy.SUCCESS
+                if (!windowCopied) {
+                    Log.w(TAG, "PixelCopy of the window failed with result $windowResult, drawing the view tree instead")
+                }
                 onCopyFinished()
-            }
+            }, mainHandler)
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "PixelCopy cannot read the window, drawing the view tree instead", e)
+            onCopyFinished()
         }
 
-        // A SurfaceView's buffer can differ in size from its view, as a video decoder's does, and the screen shows it
-        // scaled to the view's box, so the whole buffer is copied at the box's size.
+        // A surface with no frame yet shows nothing on screen, so it adds no layer, and neither does a copy that fails.
         surfaceViews.forEachIndexed { index, surfaceView ->
-            val pixels = Bitmap.createBitmap(surfaceView.rect.width(), surfaceView.rect.height(), Bitmap.Config.ARGB_8888)
+            val copiedRect = Rect(surfaceView.rect).apply { intersect(copiedRegion) }
+            val pixels = Bitmap.createBitmap(copiedRect.width(), copiedRect.height(), Bitmap.Config.ARGB_8888)
             try {
-                PixelCopy.request(surfaceView.view, pixels, { surfaceResult ->
-                    when (surfaceResult) {
-                        PixelCopy.SUCCESS ->
-                            surfaceLayers[index] =
-                                SurfaceLayer(
-                                    pixels,
-                                    (surfaceView.rect.left - region.left).toFloat(),
-                                    (surfaceView.rect.top - region.top).toFloat(),
-                                )
-                        // A surface with no frame yet shows nothing on screen, so it adds no layer.
-                        PixelCopy.ERROR_SOURCE_NO_DATA -> pixels.recycle()
-                        else -> {
-                            copyFailure = copyFailure ?: "PixelCopy of a SurfaceView failed with result $surfaceResult"
-                            pixels.recycle()
+                PixelCopy.request(surfaceView.view, surfaceView.sourceRectOf(copiedRect), pixels, { surfaceResult ->
+                    if (surfaceResult == PixelCopy.SUCCESS) {
+                        surfaceLayers[index] =
+                            SurfaceLayer(
+                                pixels,
+                                (copiedRect.left - region.left).toFloat(),
+                                (copiedRect.top - region.top).toFloat(),
+                            )
+                    } else {
+                        if (surfaceResult != PixelCopy.ERROR_SOURCE_NO_DATA) {
+                            Log.w(TAG, "PixelCopy of a SurfaceView failed with result $surfaceResult")
                         }
+                        pixels.recycle()
                     }
                     onCopyFinished()
                 }, mainHandler)
             } catch (e: IllegalArgumentException) {
-                Log.w(TAG, "PixelCopy cannot read a SurfaceView, whose surface is gone", e)
+                Log.w(TAG, "PixelCopy cannot read a SurfaceView", e)
                 pixels.recycle()
                 onCopyFinished()
             }
         }
     }
-
-    private enum class WindowSource { COPY, VIEW_TREE }
 
     private fun drawWindowRegion(
         window: Window,
@@ -480,14 +453,12 @@ class UIHelperImpl(
     }
 
     // Each layer goes behind what is drawn already, so the layers are drawn last to first, which keeps the later
-    // SurfaceView in the view tree above the earlier one. Nothing is drawn outside the window's part of the region.
+    // SurfaceView in the view tree above the earlier one.
     private fun drawBehind(
         screenshot: Bitmap,
         layers: List<SurfaceLayer>,
-        windowPart: Rect,
     ) {
         val canvas = Canvas(screenshot)
-        canvas.clipRect(windowPart)
         val behind = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OVER) }
         layers.asReversed().forEach { layer ->
             canvas.drawBitmap(layer.pixels, layer.left, layer.top, behind)
@@ -504,7 +475,20 @@ class UIHelperImpl(
     private class SurfaceViewInWindow(
         val view: SurfaceView,
         val rect: Rect,
-    )
+    ) {
+        // PixelCopy reads a SurfaceView in the pixels of its buffer, whose size can differ from the view's.
+        fun sourceRectOf(windowRect: Rect): Rect {
+            val frame = view.holder.surfaceFrame
+            val scaleX = frame.width().toFloat() / rect.width()
+            val scaleY = frame.height().toFloat() / rect.height()
+            return Rect(
+                ((windowRect.left - rect.left) * scaleX).roundToInt(),
+                ((windowRect.top - rect.top) * scaleY).roundToInt(),
+                ((windowRect.right - rect.left) * scaleX).roundToInt(),
+                ((windowRect.bottom - rect.top) * scaleY).roundToInt(),
+            )
+        }
+    }
 
     private fun collectSurfaceViews(view: View): List<SurfaceViewInWindow> =
         when {
@@ -520,51 +504,30 @@ class UIHelperImpl(
         }
 
     // The box a view covers in the window through its own and its ancestors' transforms, as UIKit's
-    // convertRect:toView: gives it, rounded as the renderer rounds the box it shows a SurfaceView's surface in:
-    // to the nearest pixel under translation alone, outward under any other transform.
+    // convertRect:toView: gives it: the window composites a SurfaceView's surface into that box.
     private fun rectInWindow(view: View): Rect {
         val bounds = RectF(0f, 0f, view.width.toFloat(), view.height.toFloat())
-        var translatesOnly = true
         var current = view
         while (true) {
-            val matrix = current.matrix
-            if (!matrix.isIdentity) {
-                translatesOnly = translatesOnly && isTranslation(matrix)
-                matrix.mapRect(bounds)
-            }
+            current.matrix.mapRect(bounds)
             bounds.offset(current.left.toFloat(), current.top.toFloat())
             val parent = current.parent as? View ?: break
             bounds.offset(-parent.scrollX.toFloat(), -parent.scrollY.toFloat())
             current = parent
         }
-        // The root view's location in the window is its own corner, already mapped above, plus the pan the window
-        // applies to all of its views.
+        // The root view's location in the window carries the pan the window applies to all of its views.
         val rootLocation = IntArray(2)
         current.getLocationInWindow(rootLocation)
-        val rootCorner = floatArrayOf(0f, 0f).also { corner -> current.matrix.mapPoints(corner) }
-        bounds.offset(rootLocation[0] - (rootCorner[0] + current.left), rootLocation[1] - (rootCorner[1] + current.top))
-        return Rect().also { rect -> if (translatesOnly) bounds.round(rect) else bounds.roundOut(rect) }
-    }
-
-    private fun isTranslation(matrix: Matrix): Boolean {
-        val values = FloatArray(9).also { matrix.getValues(it) }
-        return values[Matrix.MSCALE_X] == 1f &&
-            values[Matrix.MSCALE_Y] == 1f &&
-            values[Matrix.MSKEW_X] == 0f &&
-            values[Matrix.MSKEW_Y] == 0f &&
-            values[Matrix.MPERSP_0] == 0f &&
-            values[Matrix.MPERSP_1] == 0f
+        bounds.offset((rootLocation[0] - current.left).toFloat(), (rootLocation[1] - current.top).toFloat())
+        return Rect().also { rect -> bounds.round(rect) }
     }
 
     private fun encodePng(bitmap: Bitmap): String {
-        try {
-            val outputStream = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-            Log.i(TAG, "Screenshot captured successfully (${outputStream.size()} bytes)")
-            return android.util.Base64.encodeToString(outputStream.toByteArray(), android.util.Base64.NO_WRAP)
-        } finally {
-            bitmap.recycle()
-        }
+        val outputStream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+        bitmap.recycle()
+        Log.i(TAG, "Screenshot captured successfully (${outputStream.size()} bytes)")
+        return android.util.Base64.encodeToString(outputStream.toByteArray(), android.util.Base64.NO_WRAP)
     }
 
     // =========================================================================
