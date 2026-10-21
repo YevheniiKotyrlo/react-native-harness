@@ -274,7 +274,7 @@ class UIHelperImpl(
                 val nativeId = if (bounds != null && bounds.hasKey("nativeId")) bounds.getString("nativeId") else null
 
                 if (!nativeId.isNullOrEmpty()) {
-                    val targetView = ViewRegistry.get(nativeId)?.takeIf { view -> view.isAttachedToWindow }
+                    val targetView = ViewRegistry.get(nativeId)
                     if (targetView != null) {
                         val width = targetView.width
                         val height = targetView.height
@@ -283,7 +283,7 @@ class UIHelperImpl(
                             val viewRect = rectInWindow(targetView)
                             val rootRect = Rect(0, 0, root.width, root.height)
 
-                            if (!viewRect.isEmpty && rootRect.contains(viewRect)) {
+                            if (targetView.isAttachedToWindow && !viewRect.isEmpty && rootRect.contains(viewRect)) {
                                 Log.i(TAG, "View $nativeId is fully on screen. Using screen-based screenshotting.")
                                 captureWindowRegion(window, viewRect, promise)
                             } else {
