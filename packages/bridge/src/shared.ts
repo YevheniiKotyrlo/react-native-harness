@@ -169,6 +169,9 @@ export type BridgeServerFunctions = {
   ) => Promise<{ pass: boolean; message: string }>;
 };
 
+export type SnapshotUpdateState = 'all' | 'new' | 'none';
+
 export type HarnessContext = {
   platform: HarnessPlatform;
+  updateSnapshot: SnapshotUpdateState;
 };
