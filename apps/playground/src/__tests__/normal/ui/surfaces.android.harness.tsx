@@ -215,7 +215,7 @@ describe('Screenshot of an element by the box it covers on the screen', () => {
           testID="scaled-to-nothing"
           style={{
             width: 48,
-            height: 48,
+            height: 40,
             backgroundColor: 'red',
             transform: [{ scaleY: 0 }],
           }}
@@ -243,6 +243,29 @@ describe('Screenshot of an element by the box it covers on the screen', () => {
     const underMovedRoot = await screen.findByTestId('under-moved-root');
     await expect(await screen.screenshot(underMovedRoot)).toMatchImageSnapshot({
       name: 'element-under-moved-root',
+    });
+  });
+
+  test('captures an element under nested rotations in the box it covers on the screen', async () => {
+    await render(
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <View style={{ transform: [{ rotate: '45deg' }] }}>
+          <View
+            testID="counter-rotated"
+            style={{
+              width: 48,
+              height: 48,
+              backgroundColor: 'red',
+              transform: [{ rotate: '-45deg' }],
+            }}
+          />
+        </View>
+      </View>
+    );
+
+    const counterRotated = await screen.findByTestId('counter-rotated');
+    await expect(await screen.screenshot(counterRotated)).toMatchImageSnapshot({
+      name: 'element-under-nested-rotations',
     });
   });
 
