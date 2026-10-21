@@ -74,12 +74,10 @@ export const matchImageSnapshot = async (
   const testDir = path.dirname(testFilePath);
   const snapshotsDir = path.join(testDir, SNAPSHOT_DIR_NAME, platformName);
 
-  const snapshotName = `${options.name}.png`;
-  const snapshotPath = path.join(snapshotsDir, snapshotName);
-  const actualPath = path.join(
-    snapshotsDir,
-    `${snapshotName.replace('.png', '')}-actual.png`
-  );
+  const snapshotPath = path.join(snapshotsDir, `${options.name}.png`);
+  const failureImagePath = (image: 'actual' | 'diff'): string =>
+    path.join(snapshotsDir, `${options.name}-${image}.png`);
+  const actualPath = failureImagePath('actual');
 
   await fs.mkdir(snapshotsDir, { recursive: true });
 
@@ -169,8 +167,7 @@ export const matchImageSnapshot = async (
 
   // Save diff and actual images when test fails
   if (!pass) {
-    const diffFileName = `${snapshotName.replace('.png', '')}-diff.png`;
-    const diffPath = path.join(snapshotsDir, diffFileName);
+    const diffPath = failureImagePath('diff');
     await fs.writeFile(diffPath, PNG.sync.write(diff));
 
     await fs.writeFile(actualPath, receivedBuffer);

@@ -126,4 +126,47 @@ describe('matchImageSnapshot', () => {
       existsSync(path.join(path.dirname(snapshotPath), 'square-diff.png'))
     ).toBe(true);
   });
+
+  it('names the received image of a missing snapshot after the whole snapshot name', async () => {
+    await matchImageSnapshot(
+      { path: receivedPath },
+      testFilePath,
+      { name: 'logo.png-dark' },
+      'android',
+      'none'
+    );
+
+    expect(
+      existsSync(
+        path.join(path.dirname(snapshotPath), 'logo.png-dark-actual.png')
+      )
+    ).toBe(true);
+  });
+
+  it('names the images of a mismatch after the whole snapshot name', async () => {
+    await mkdir(path.dirname(snapshotPath), { recursive: true });
+    await writeFile(
+      path.join(path.dirname(snapshotPath), 'logo.png-dark.png'),
+      createPng({ fill: 0 })
+    );
+
+    await matchImageSnapshot(
+      { path: receivedPath },
+      testFilePath,
+      { name: 'logo.png-dark' },
+      'android',
+      'none'
+    );
+
+    expect(
+      existsSync(
+        path.join(path.dirname(snapshotPath), 'logo.png-dark-actual.png')
+      )
+    ).toBe(true);
+    expect(
+      existsSync(
+        path.join(path.dirname(snapshotPath), 'logo.png-dark-diff.png')
+      )
+    ).toBe(true);
+  });
 });
