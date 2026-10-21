@@ -483,14 +483,14 @@ class UIHelperImpl(
     // so a slow GPU gets the copy requested again, up to COPY_ATTEMPTS times, before it counts as failed.
     private fun requestCopy(
         request: (PixelCopy.OnPixelCopyFinishedListener) -> Unit,
-        onOutcome: (CopyOutcome) -> Unit,
         attempt: Int = 1,
+        onOutcome: (CopyOutcome) -> Unit,
     ) {
         try {
             request(
                 PixelCopy.OnPixelCopyFinishedListener { result ->
                     if (result == PixelCopy.ERROR_TIMEOUT && attempt < COPY_ATTEMPTS) {
-                        requestCopy(request, onOutcome, attempt + 1)
+                        requestCopy(request, attempt + 1, onOutcome)
                     } else {
                         onOutcome(CopyOutcome.Finished(result))
                     }
