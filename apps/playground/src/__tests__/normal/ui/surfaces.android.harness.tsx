@@ -135,6 +135,47 @@ describe('Screenshot of views drawn on a surface of their own', () => {
     });
   });
 
+  test('draws a SurfaceView under a half-pixel translation into the box the screen shows it in', async () => {
+    await render(
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <View
+          testID="half-pixel-translated-surface"
+          style={{ transform: [{ translateX: 4 }] }}
+        >
+          <SplitColorSurfaceView style={{ width: 96, height: 96 }} />
+        </View>
+      </View>
+    );
+    await screen.findByAccessibilityLabel('split-surface-view-painted');
+
+    const translatedSurface = await screen.findByTestId(
+      'half-pixel-translated-surface'
+    );
+    await expect(
+      await screen.screenshot(translatedSurface)
+    ).toMatchImageSnapshot({
+      name: 'surface-view-half-pixel-translation',
+    });
+  });
+
+  test('draws a SurfaceView under an enlarging scale into the box the screen shows it in', async () => {
+    await render(
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <View testID="enlarged-surface" style={{ transform: [{ scale: 1.5 }] }}>
+          <SplitColorSurfaceView style={{ width: 96, height: 96 }} />
+        </View>
+      </View>
+    );
+    await screen.findByAccessibilityLabel('split-surface-view-painted');
+
+    const enlargedSurface = await screen.findByTestId('enlarged-surface');
+    await expect(await screen.screenshot(enlargedSurface)).toMatchImageSnapshot(
+      {
+        name: 'surface-view-enlarged',
+      }
+    );
+  });
+
   test('copies a video frame larger than its SurfaceView at the size the screen shows it', async () => {
     await render(
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -191,7 +232,7 @@ describe('Screenshot of an element by the box it covers on the screen', () => {
   test("captures an element where it is drawn when the window's root view moves", async () => {
     await render(
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-        <RootShiftView rootTranslationY={40} />
+        <RootShiftView rootTranslationY={40.2} />
         <View
           testID="under-moved-root"
           style={{ width: 48, height: 48, backgroundColor: 'green' }}
@@ -203,6 +244,23 @@ describe('Screenshot of an element by the box it covers on the screen', () => {
     await expect(await screen.screenshot(underMovedRoot)).toMatchImageSnapshot({
       name: 'element-under-moved-root',
     });
+  });
+
+  test('captures the window for an element no longer on the screen', async () => {
+    await render(
+      <View
+        testID="replaced"
+        style={{ width: 48, height: 48, backgroundColor: 'red' }}
+      />
+    );
+    const replaced = await screen.findByTestId('replaced');
+    await render(<View style={{ flex: 1, backgroundColor: 'blue' }} />);
+
+    const replacedShot = await screen.screenshot(replaced);
+    const windowShot = await screen.screenshot();
+    expect(replacedShot && [replacedShot.width, replacedShot.height]).toEqual(
+      windowShot && [windowShot.width, windowShot.height]
+    );
   });
 });
 
