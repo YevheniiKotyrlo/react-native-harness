@@ -1,4 +1,4 @@
-import { describe, test, render, expect } from 'react-native-harness';
+import { describe, test, render, expect, waitFor } from 'react-native-harness';
 import { Dimensions, View } from 'react-native';
 import { screen } from '@react-native-harness/ui';
 
@@ -246,21 +246,35 @@ describe('Screenshot of an element by the box it covers on the screen', () => {
     });
   });
 
-  test('captures the window for an element no longer on the screen', async () => {
-    await render(
-      <View
-        testID="replaced"
-        style={{ width: 48, height: 48, backgroundColor: 'red' }}
-      />
+  test('draws an element clipped out of the view tree as the element draws itself', async () => {
+    const clippingTree = (top: number) => (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <View
+          removeClippedSubviews
+          style={{ width: 96, height: 96, overflow: 'hidden' }}
+        >
+          <View
+            testID="clipped"
+            style={{
+              position: 'absolute',
+              top,
+              width: 48,
+              height: 48,
+              backgroundColor: 'red',
+              overflow: 'hidden',
+            }}
+          />
+        </View>
+      </View>
     );
-    const replaced = await screen.findByTestId('replaced');
-    await render(<View style={{ flex: 1, backgroundColor: 'blue' }} />);
+    const { rerender } = await render(clippingTree(0));
+    const clipped = await screen.findByTestId('clipped');
+    await rerender(clippingTree(200));
+    await waitFor(() => expect(screen.queryByTestId('clipped')).toBeNull());
 
-    const replacedShot = await screen.screenshot(replaced);
-    const windowShot = await screen.screenshot();
-    expect(replacedShot && [replacedShot.width, replacedShot.height]).toEqual(
-      windowShot && [windowShot.width, windowShot.height]
-    );
+    await expect(await screen.screenshot(clipped)).toMatchImageSnapshot({
+      name: 'element-clipped-out',
+    });
   });
 });
 
