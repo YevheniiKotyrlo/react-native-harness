@@ -54,6 +54,7 @@ const setup = async (options: { autoPong?: boolean } = {}) => {
     port: 0,
     context: {
       platform: { name: 'ios', platformId: 'ios', runner: '/dev/null', config: {} },
+      updateSnapshot: 'new',
     },
     liveness: {
       connectionCheck: { intervalMs: 20, timeoutMs: 150 },
