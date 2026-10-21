@@ -502,7 +502,7 @@ class UIHelperImpl(
     }
 
     private fun drawView(view: View): Bitmap =
-        drawRegion(Rect(0, 0, view.width, view.height)) { canvas -> view.draw(canvas) }
+        drawRegion(Rect(0, 0, view.width, view.height)) { canvas -> drawScrolled(view, canvas) }
 
     // The window's view tree drawn in software where the window shows it, through the root view's transform and the
     // window's pan and cut at the window's edges, so the region and the SurfaceViews' boxes line up with it.
@@ -513,9 +513,17 @@ class UIHelperImpl(
         drawRegion(region) { canvas ->
             canvas.clipRect(0, 0, rootView.width, rootView.height)
             canvas.concat(viewToWindow(rootView))
-            canvas.translate(-rootView.scrollX.toFloat(), -rootView.scrollY.toFloat())
-            rootView.draw(canvas)
+            drawScrolled(rootView, canvas)
         }
+
+    // A view draws its content in its scrolled space, which the parent's draw otherwise translates it into.
+    private fun drawScrolled(
+        view: View,
+        canvas: Canvas,
+    ) {
+        canvas.translate(-view.scrollX.toFloat(), -view.scrollY.toFloat())
+        view.draw(canvas)
+    }
 
     private fun drawRegion(
         region: Rect,
