@@ -7,6 +7,14 @@ const pngSize = (data: Uint8Array) => {
   return { width: header.getUint32(16), height: header.getUint32(20) };
 };
 
+const describeCapture = (screenshot: { data: Uint8Array } | null): string => {
+  if (screenshot === null) {
+    return 'null';
+  }
+  const { width, height } = pngSize(screenshot.data);
+  return `${width}x${height}`;
+};
+
 describe('capture geometry', () => {
   test('an element of zero size is not captured as the whole window', async () => {
     await render(
@@ -17,7 +25,7 @@ describe('capture geometry', () => {
 
     const screenshot = await screen.screenshot(await screen.findByTestId('empty'));
 
-    expect(screenshot && pngSize(screenshot.data)).toBeNull();
+    expect(describeCapture(screenshot)).toBe('null');
   });
 
   test('a region is captured at the size its box covers on the screen', async () => {
@@ -40,12 +48,8 @@ describe('capture geometry', () => {
     const element = await screen.screenshot(await screen.findByTestId('box'));
     const region = await screen.screenshot({ x: 10, y: 10, width: 33, height: 33 });
 
-    expect({
-      density: PixelRatio.get(),
-      region: region && pngSize(region.data),
-    }).toEqual({
-      density: PixelRatio.get(),
-      region: element && pngSize(element.data),
-    });
+    expect(`region ${describeCapture(region)} at density ${PixelRatio.get()}`).toBe(
+      `region ${describeCapture(element)} at density ${PixelRatio.get()}`
+    );
   });
 });
