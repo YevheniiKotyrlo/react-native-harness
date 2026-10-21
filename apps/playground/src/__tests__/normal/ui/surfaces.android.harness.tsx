@@ -1,5 +1,6 @@
+import { createRef } from 'react';
 import { describe, test, render, expect, waitFor } from 'react-native-harness';
-import { Dimensions, View } from 'react-native';
+import { Dimensions, ScrollView, View } from 'react-native';
 import { screen } from '@react-native-harness/ui';
 
 import {
@@ -298,6 +299,47 @@ describe('Screenshot of an element by the box it covers on the screen', () => {
     await expect(await screen.screenshot(clipped)).toMatchImageSnapshot({
       name: 'element-clipped-out',
     });
+  });
+
+  test('draws a scrolled element partly off the screen at its scroll offset', async () => {
+    const scrollView = createRef<ScrollView>();
+    let onScrolledToBlue: () => void = () => undefined;
+    const scrolledToBlue = new Promise<void>((resolve) => {
+      onScrolledToBlue = resolve;
+    });
+    await render(
+      <View style={{ flex: 1 }}>
+        <ScrollView
+          ref={scrollView}
+          testID="scrolled-off-screen"
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          scrollEventThrottle={16}
+          onScroll={({ nativeEvent }) => {
+            if (nativeEvent.contentOffset.x >= 95.5) {
+              onScrolledToBlue();
+            }
+          }}
+          style={{
+            position: 'absolute',
+            top: 96,
+            left: -48,
+            width: 96,
+            height: 96,
+          }}
+        >
+          <View style={{ width: 96, height: 96, backgroundColor: 'red' }} />
+          <View style={{ width: 96, height: 96, backgroundColor: 'blue' }} />
+        </ScrollView>
+      </View>
+    );
+    scrollView.current?.scrollTo({ x: 96, animated: false });
+    await scrolledToBlue;
+
+    const scrolledOffScreen = await screen.findByTestId('scrolled-off-screen');
+    await expect(
+      await screen.screenshot(scrolledOffScreen)
+    ).toMatchImageSnapshot({ name: 'element-scrolled-off-screen' });
   });
 });
 
