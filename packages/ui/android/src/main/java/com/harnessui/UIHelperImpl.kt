@@ -284,9 +284,7 @@ class UIHelperImpl(
                                 captureWindowRegion(window, viewRect, promise)
                             } else {
                                 Log.i(TAG, "View $nativeId is not fully on screen. Using direct view render.")
-                                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                                targetView.draw(Canvas(bitmap))
-                                promise.resolve(encodePng(bitmap))
+                                promise.resolve(encodePng(drawViewRegion(targetView, Rect(0, 0, width, height))))
                             }
                             return@runOnUiThread
                         }
@@ -330,17 +328,17 @@ class UIHelperImpl(
         region: Rect,
         promise: Promise,
     ) {
+        val decorView = window.decorView
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            promise.resolve(encodePng(drawWindowRegion(window, region)))
+            promise.resolve(encodePng(drawViewRegion(decorView, region)))
             return
         }
 
-        val decorView = window.decorView
         // PixelCopy stretches a source rect that runs past the window over the whole bitmap, so only the part on the
         // window is copied, and placed at its offset in the region.
         val copiedRegion = Rect(0, 0, decorView.width, decorView.height)
         if (!copiedRegion.intersect(region)) {
-            promise.resolve(encodePng(drawWindowRegion(window, region)))
+            promise.resolve(encodePng(drawViewRegion(decorView, region)))
             return
         }
 
@@ -384,7 +382,7 @@ class UIHelperImpl(
                         WindowSource.COPY -> placeInRegion(windowPixels, copiedRegion, region)
                         WindowSource.VIEW_TREE -> {
                             windowPixels.recycle()
-                            drawWindowRegion(window, region)
+                            drawViewRegion(decorView, region)
                         }
                     }
                 drawBehind(screenshot, layers, Rect(copiedRegion).apply { offset(-region.left, -region.top) })
@@ -449,14 +447,19 @@ class UIHelperImpl(
 
     private enum class WindowSource { COPY, VIEW_TREE }
 
-    private fun drawWindowRegion(
-        window: Window,
+    private fun drawViewRegion(
+        view: View,
         region: Rect,
     ): Bitmap {
         val bitmap = Bitmap.createBitmap(region.width(), region.height(), Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        canvas.translate(-region.left.toFloat(), -region.top.toFloat())
-        window.decorView.rootView.draw(canvas)
+        try {
+            val canvas = Canvas(bitmap)
+            canvas.translate(-region.left.toFloat(), -region.top.toFloat())
+            view.draw(canvas)
+        } catch (e: Exception) {
+            bitmap.recycle()
+            throw e
+        }
         return bitmap
     }
 
