@@ -537,9 +537,9 @@ class UIHelperImpl(
     }
 
     // Each layer goes behind what is drawn already, so the layers are drawn last to first, stacking the SurfaceViews in
-    // the order of the view tree. The screen stacks a media overlay above the others and the rest in the order their
-    // surfaces were created, which no public API before Android 16 reports. Nothing is drawn outside the window's part
-    // of the region.
+    // the order of the view tree. The screen stacks a media overlay above the others, which no public API reports
+    // before Android 16, and the rest in the order their surfaces were created, which no API reports. Nothing is drawn
+    // outside the window's part of the region.
     private fun drawBehind(
         screenshot: Bitmap,
         layers: List<SurfaceLayer>,
