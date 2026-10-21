@@ -214,7 +214,7 @@ describe('Screenshot of an element by the box it covers on the screen', () => {
         <View
           testID="scaled-to-nothing"
           style={{
-            width: 48,
+            width: 40,
             height: 40,
             backgroundColor: 'red',
             transform: [{ scaleY: 0 }],
