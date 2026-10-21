@@ -299,12 +299,10 @@ class UIHelperImpl(
                 }
 
                 // Check if bounds are provided and have non-zero dimensions
-                val hasBounds = bounds != null && bounds.getDouble("width") > 0 && bounds.getDouble("height") > 0
-
                 val region =
-                    if (hasBounds) {
+                    if (bounds != null && bounds.getDouble("width") > 0 && bounds.getDouble("height") > 0) {
                         // Convert dp to px for bounds
-                        val captureX = (bounds!!.getDouble("x") * density).toInt()
+                        val captureX = (bounds.getDouble("x") * density).toInt()
                         val captureY = (bounds.getDouble("y") * density).toInt()
                         val captureWidth = (bounds.getDouble("width") * density).toInt()
                         val captureHeight = (bounds.getDouble("height") * density).toInt()
