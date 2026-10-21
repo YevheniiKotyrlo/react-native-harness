@@ -35,9 +35,6 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlin.math.floor
-import kotlin.math.min
-import kotlin.math.roundToInt
 
 /**
  * UI helper implementation for HarnessUI.
@@ -50,7 +47,6 @@ class UIHelperImpl(
         private const val TAG = "HarnessUI"
         private const val TAP_DURATION_MS = 50L // Duration between touch down and up
         private const val EVENT_PROCESSING_DELAY_MS = 10L // Delay after touch up for React Native to process the event
-        private const val GEOMETRY_FUDGE_FACTOR = 0.0656f // How far the renderer widens a box it snaps to pixels
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -283,12 +279,14 @@ class UIHelperImpl(
                             val viewRect = rectInWindow(targetView)
                             val rootRect = Rect(0, 0, root.width, root.height)
 
-                            if (targetView.isAttachedToWindow && !viewRect.isEmpty && rootRect.contains(viewRect)) {
+                            if (!viewRect.isEmpty && rootRect.contains(viewRect)) {
                                 Log.i(TAG, "View $nativeId is fully on screen. Using screen-based screenshotting.")
                                 captureWindowRegion(window, viewRect, promise)
                             } else {
                                 Log.i(TAG, "View $nativeId is not fully on screen. Using direct view render.")
-                                promise.resolve(encodePng(drawViewRegion(targetView, Rect(0, 0, width, height))))
+                                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                                targetView.draw(Canvas(bitmap))
+                                promise.resolve(encodePng(bitmap))
                             }
                             return@runOnUiThread
                         }
@@ -326,24 +324,23 @@ class UIHelperImpl(
     // nothing into a software canvas, and a SurfaceView's content lives on a separate surface behind the window, which
     // leaves a transparent hole over it. PixelCopy reads the window's surface, which the TextureViews render into, and
     // each SurfaceView's surface, each at the latest frame it holds when its copy runs. A SurfaceView set above its window
-    // with setZOrderOnTop punches no hole, so it stays hidden: before Android 16 only hidden API tells one apart, and
-    // the SDK this module compiles against by default predates getCompositionOrder().
+    // with setZOrderOnTop punches no hole, so it stays hidden: only hidden API tells one apart.
     private fun captureWindowRegion(
         window: Window,
         region: Rect,
         promise: Promise,
     ) {
-        val decorView = window.decorView
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            promise.resolve(encodePng(drawViewRegion(decorView, region)))
+            promise.resolve(encodePng(drawWindowRegion(window, region)))
             return
         }
 
+        val decorView = window.decorView
         // PixelCopy stretches a source rect that runs past the window over the whole bitmap, so only the part on the
         // window is copied, and placed at its offset in the region.
         val copiedRegion = Rect(0, 0, decorView.width, decorView.height)
         if (!copiedRegion.intersect(region)) {
-            promise.resolve(encodePng(drawViewRegion(decorView, region)))
+            promise.resolve(encodePng(drawWindowRegion(window, region)))
             return
         }
 
@@ -387,7 +384,7 @@ class UIHelperImpl(
                         WindowSource.COPY -> placeInRegion(windowPixels, copiedRegion, region)
                         WindowSource.VIEW_TREE -> {
                             windowPixels.recycle()
-                            drawViewRegion(decorView, region)
+                            drawWindowRegion(window, region)
                         }
                     }
                 drawBehind(screenshot, layers, Rect(copiedRegion).apply { offset(-region.left, -region.top) })
@@ -420,24 +417,21 @@ class UIHelperImpl(
         }
 
         // A SurfaceView's buffer can differ in size from its view, as a video decoder's does, and the screen shows it
-        // scaled to the view's box, so the whole buffer is copied, at no more than the view's own size, and drawn into
-        // the box.
+        // scaled to the view's box, so the whole buffer is copied at the box's size.
         surfaceViews.forEachIndexed { index, surfaceView ->
-            val pixels =
-                Bitmap.createBitmap(
-                    min(surfaceView.rect.width(), surfaceView.view.width),
-                    min(surfaceView.rect.height(), surfaceView.view.height),
-                    Bitmap.Config.ARGB_8888,
-                )
+            val pixels = Bitmap.createBitmap(surfaceView.rect.width(), surfaceView.rect.height(), Bitmap.Config.ARGB_8888)
             try {
                 PixelCopy.request(surfaceView.view, pixels, { surfaceResult ->
                     when (surfaceResult) {
                         PixelCopy.SUCCESS ->
                             surfaceLayers[index] =
-                                SurfaceLayer(pixels, Rect(surfaceView.rect).apply { offset(-region.left, -region.top) })
-                        // A surface with no frame yet, one that is gone and a protected one hold nothing a copy can
-                        // read, so they add no layer.
-                        PixelCopy.ERROR_SOURCE_NO_DATA, PixelCopy.ERROR_SOURCE_INVALID -> pixels.recycle()
+                                SurfaceLayer(
+                                    pixels,
+                                    (surfaceView.rect.left - region.left).toFloat(),
+                                    (surfaceView.rect.top - region.top).toFloat(),
+                                )
+                        // A surface with no frame yet shows nothing on screen, so it adds no layer.
+                        PixelCopy.ERROR_SOURCE_NO_DATA -> pixels.recycle()
                         else -> {
                             copyFailure = copyFailure ?: "PixelCopy of a SurfaceView failed with result $surfaceResult"
                             pixels.recycle()
@@ -455,19 +449,14 @@ class UIHelperImpl(
 
     private enum class WindowSource { COPY, VIEW_TREE }
 
-    private fun drawViewRegion(
-        view: View,
+    private fun drawWindowRegion(
+        window: Window,
         region: Rect,
     ): Bitmap {
         val bitmap = Bitmap.createBitmap(region.width(), region.height(), Bitmap.Config.ARGB_8888)
-        try {
-            val canvas = Canvas(bitmap)
-            canvas.translate(-region.left.toFloat(), -region.top.toFloat())
-            view.draw(canvas)
-        } catch (e: Exception) {
-            bitmap.recycle()
-            throw e
-        }
+        val canvas = Canvas(bitmap)
+        canvas.translate(-region.left.toFloat(), -region.top.toFloat())
+        window.decorView.rootView.draw(canvas)
         return bitmap
     }
 
@@ -499,16 +488,17 @@ class UIHelperImpl(
     ) {
         val canvas = Canvas(screenshot)
         canvas.clipRect(windowPart)
-        val behind = Paint(Paint.FILTER_BITMAP_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OVER) }
+        val behind = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OVER) }
         layers.asReversed().forEach { layer ->
-            canvas.drawBitmap(layer.pixels, null, layer.box, behind)
+            canvas.drawBitmap(layer.pixels, layer.left, layer.top, behind)
             layer.pixels.recycle()
         }
     }
 
     private class SurfaceLayer(
         val pixels: Bitmap,
-        val box: Rect,
+        val left: Float,
+        val top: Float,
     )
 
     private class SurfaceViewInWindow(
@@ -531,7 +521,7 @@ class UIHelperImpl(
 
     // The box a view covers in the window through its own and its ancestors' transforms, as UIKit's
     // convertRect:toView: gives it, rounded as the renderer rounds the box it shows a SurfaceView's surface in:
-    // snapped to pixel boundaries under translation alone, outward under any other transform.
+    // to the nearest pixel under translation alone, outward under any other transform.
     private fun rectInWindow(view: View): Rect {
         val bounds = RectF(0f, 0f, view.width.toFloat(), view.height.toFloat())
         var translatesOnly = true
@@ -547,27 +537,14 @@ class UIHelperImpl(
             bounds.offset(-parent.scrollX.toFloat(), -parent.scrollY.toFloat())
             current = parent
         }
-        // The root view's location in the window is its own corner, already mapped above, rounded to whole pixels, plus
-        // the pan the window applies to all of its views.
+        // The root view's location in the window is its own corner, already mapped above, plus the pan the window
+        // applies to all of its views.
         val rootLocation = IntArray(2)
         current.getLocationInWindow(rootLocation)
         val rootCorner = floatArrayOf(0f, 0f).also { corner -> current.matrix.mapPoints(corner) }
-        bounds.offset(
-            (rootLocation[0] - (rootCorner[0] + current.left).roundToInt()).toFloat(),
-            (rootLocation[1] - (rootCorner[1] + current.top).roundToInt()).toFloat(),
-        )
-        return if (translatesOnly) snapToPixelBoundaries(bounds) else Rect().also { rect -> bounds.roundOut(rect) }
+        bounds.offset(rootLocation[0] - (rootCorner[0] + current.left), rootLocation[1] - (rootCorner[1] + current.top))
+        return Rect().also { rect -> if (translatesOnly) bounds.round(rect) else bounds.roundOut(rect) }
     }
-
-    // As the renderer's Rect::snapGeometryToPixelBoundaries: to the nearest pixel, with an edge within
-    // GEOMETRY_FUDGE_FACTOR of a half pixel going outward.
-    private fun snapToPixelBoundaries(bounds: RectF): Rect =
-        Rect(
-            floor(bounds.left + 0.5f - GEOMETRY_FUDGE_FACTOR).toInt(),
-            floor(bounds.top + 0.5f - GEOMETRY_FUDGE_FACTOR).toInt(),
-            floor(bounds.right + 0.5f + GEOMETRY_FUDGE_FACTOR).toInt(),
-            floor(bounds.bottom + 0.5f + GEOMETRY_FUDGE_FACTOR).toInt(),
-        )
 
     private fun isTranslation(matrix: Matrix): Boolean {
         val values = FloatArray(9).also { matrix.getValues(it) }
