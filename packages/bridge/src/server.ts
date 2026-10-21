@@ -171,7 +171,7 @@ export const createHarnessBridge = async (
             testPath,
             opts,
             context.platform.name,
-            context.updateSnapshot
+            context.updateSnapshot ?? 'new'
           ),
       },
       transport: {

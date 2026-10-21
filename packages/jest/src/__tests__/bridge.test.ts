@@ -288,6 +288,46 @@ describe('bridge: createHarnessBridge + connectToHarness', () => {
         }
       },
     );
+
+    it('writes a missing snapshot when the context names no snapshot state', async () => {
+      bridge.dispose();
+      bridge = await createHarnessBridge({
+        port: 0,
+        context: { platform: makeContext().platform },
+      });
+      bridgePort = (bridge.ws.address() as { port: number }).port;
+
+      const directory = await fs.mkdtemp(
+        path.join(os.tmpdir(), 'harness-bridge-snapshot-'),
+      );
+
+      try {
+        const receivedPath = path.join(directory, 'received.png');
+        await fs.writeFile(receivedPath, 'received image');
+
+        const connectionPromise = bridge.nextConnection();
+        const handle = await connect();
+        handle.reportReady(device);
+        await connectionPromise;
+
+        const result = await handle.matchImageSnapshot(
+          { path: receivedPath },
+          path.join(directory, 'example.harness.tsx'),
+          { name: 'square' },
+          'ios',
+        );
+
+        expect(result.pass).toBe(true);
+        expect(
+          existsSync(
+            path.join(directory, '__image_snapshots__', 'ios', 'square.png'),
+          ),
+        ).toBe(true);
+        handle.disconnect();
+      } finally {
+        await fs.rm(directory, { force: true, recursive: true });
+      }
+    });
   });
 
   describe('dispose', () => {

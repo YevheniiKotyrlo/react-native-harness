@@ -173,5 +173,6 @@ export type SnapshotUpdateState = 'all' | 'new' | 'none';
 
 export type HarnessContext = {
   platform: HarnessPlatform;
-  updateSnapshot: SnapshotUpdateState;
+  /** Jest's snapshot update state; when absent, a missing image snapshot is written. */
+  updateSnapshot?: SnapshotUpdateState;
 };
