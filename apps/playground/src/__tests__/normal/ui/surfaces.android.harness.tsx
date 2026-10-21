@@ -119,7 +119,7 @@ describe('Screenshot of views drawn on a surface of their own', () => {
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
         <View
           testID="fractionally-scaled-surface"
-          style={{ transform: [{ scale: 0.3 }] }}
+          style={{ transform: [{ scale: 0.35 }] }}
         >
           <SplitColorSurfaceView style={{ width: 96, height: 96 }} />
         </View>
