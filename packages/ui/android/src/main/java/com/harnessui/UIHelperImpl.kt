@@ -289,7 +289,7 @@ class UIHelperImpl(
                                 captureWindowRegion(window, viewRect, promise)
                             } else {
                                 Log.i(TAG, "View $nativeId is not fully on screen. Using direct view render.")
-                                promise.resolve(encodePng(drawViewRegion(targetView, Rect(0, 0, width, height))))
+                                promise.resolve(encodePng(drawView(targetView)))
                             }
                             return@runOnUiThread
                         }
@@ -336,7 +336,13 @@ class UIHelperImpl(
     ) {
         val decorView = window.decorView
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            promise.resolve(encodePng(drawViewRegion(decorView, region)))
+            promise.resolve(encodePng(drawWindowRegion(decorView, region)))
+            return
+        }
+        // A window that is not shown, as while the screen is off, has nothing on the screen to copy.
+        if (!decorView.isShown) {
+            Log.e(TAG, "Screenshot capture failed: the window is not shown")
+            promise.resolve(null)
             return
         }
 
@@ -344,22 +350,22 @@ class UIHelperImpl(
         // window is copied, and placed at its offset in the region.
         val copiedRegion = Rect(0, 0, decorView.width, decorView.height)
         if (!copiedRegion.intersect(region)) {
-            promise.resolve(encodePng(drawViewRegion(decorView, region)))
+            promise.resolve(encodePng(drawWindowRegion(decorView, region)))
             return
         }
 
         val surfaceViews =
-            if (decorView.isShown) {
-                collectSurfaceViews(decorView).filter { surfaceView ->
-                    !surfaceView.rect.isEmpty && Rect.intersects(copiedRegion, surfaceView.rect)
-                }
-            } else {
-                emptyList()
+            collectSurfaceViews(decorView).filter { surfaceView ->
+                !surfaceView.rect.isEmpty && Rect.intersects(copiedRegion, surfaceView.rect)
             }
         val surfaceLayers = arrayOfNulls<SurfaceLayer>(surfaceViews.size)
         var windowSource: WindowSource = WindowSource.ViewTree
         var copyFailure: String? = null
         var pendingCopies = surfaceViews.size + 1
+
+        fun failCopy(reason: String) {
+            copyFailure = copyFailure ?: reason
+        }
 
         fun onCopyFinished() {
             pendingCopies -= 1
@@ -388,7 +394,7 @@ class UIHelperImpl(
                 screenshot =
                     when (val source = windowSource) {
                         is WindowSource.Copy -> placeInRegion(source.pixels, copiedRegion, region)
-                        WindowSource.ViewTree -> drawViewRegion(decorView, region)
+                        WindowSource.ViewTree -> drawWindowRegion(decorView, region)
                     }
                 drawBehind(screenshot, layers, Rect(copiedRegion).apply { offset(-region.left, -region.top) })
                 promise.resolve(encodePng(screenshot))
@@ -415,15 +421,11 @@ class UIHelperImpl(
                             windowSource = WindowSource.Copy(windowPixels)
                         } else {
                             windowPixels.recycle()
-                            copyFailure = "PixelCopy of the window failed with result ${outcome.result}"
+                            failCopy("PixelCopy of the window failed with result ${outcome.result}")
                         }
                     is CopyOutcome.SourceGone -> {
-                        Log.w(
-                            TAG,
-                            "PixelCopy cannot read the window, so it has no surface: drawing the view tree",
-                            outcome.error,
-                        )
                         windowPixels.recycle()
+                        failCopy("PixelCopy cannot read the window, which has no surface: ${outcome.error.message}")
                     }
                 }
                 onCopyFinished()
@@ -453,7 +455,7 @@ class UIHelperImpl(
                             // read, so they add no layer.
                             PixelCopy.ERROR_SOURCE_NO_DATA, PixelCopy.ERROR_SOURCE_INVALID -> pixels.recycle()
                             else -> {
-                                copyFailure = copyFailure ?: "PixelCopy of a SurfaceView failed with result $result"
+                                failCopy("PixelCopy of a SurfaceView failed with result $result")
                                 pixels.recycle()
                             }
                         }
@@ -501,15 +503,31 @@ class UIHelperImpl(
         }
     }
 
-    private fun drawViewRegion(
-        view: View,
+    private fun drawView(view: View): Bitmap =
+        drawRegion(Rect(0, 0, view.width, view.height)) { canvas -> view.draw(canvas) }
+
+    // The window's view tree drawn in software where the window shows it, through the root view's transform and the
+    // window's pan and cut at the window's edges, so the region and the SurfaceViews' boxes line up with it.
+    private fun drawWindowRegion(
+        rootView: View,
         region: Rect,
+    ): Bitmap =
+        drawRegion(region) { canvas ->
+            canvas.clipRect(0, 0, rootView.width, rootView.height)
+            canvas.concat(viewToWindow(rootView))
+            canvas.translate(-rootView.scrollX.toFloat(), -rootView.scrollY.toFloat())
+            rootView.draw(canvas)
+        }
+
+    private fun drawRegion(
+        region: Rect,
+        draw: (Canvas) -> Unit,
     ): Bitmap {
         val bitmap = Bitmap.createBitmap(region.width(), region.height(), Bitmap.Config.ARGB_8888)
         try {
             val canvas = Canvas(bitmap)
             canvas.translate(-region.left.toFloat(), -region.top.toFloat())
-            view.draw(canvas)
+            draw(canvas)
         } catch (e: Exception) {
             bitmap.recycle()
             throw e
@@ -582,22 +600,20 @@ class UIHelperImpl(
         return found
     }
 
-    // The box a view covers in the window through its own and its ancestors' transforms, composed into one as the
-    // renderer composes them and as UIKit's convertRect:toView: gives it, rounded as the renderer rounds the box it
-    // shows a SurfaceView's surface in: snapped to pixel boundaries under translation alone, outward under any other
-    // transform. A box with no area stays empty whatever its rounding would give.
-    private fun rectInWindow(view: View): Rect {
-        val transform = Matrix(view.matrix).apply { postTranslate(view.left.toFloat(), view.top.toFloat()) }
+    // A view's own space mapped into the window through its own and its ancestors' transforms, composed into one as
+    // the renderer composes them, then the pan the window applies to all of its views.
+    private fun viewToWindow(view: View): Matrix {
+        val transform = Matrix()
         var current = view
         while (true) {
+            transform.postConcat(current.matrix)
+            transform.postTranslate(current.left.toFloat(), current.top.toFloat())
             val parent = current.parent as? View ?: break
             transform.postTranslate(-parent.scrollX.toFloat(), -parent.scrollY.toFloat())
-            transform.postConcat(parent.matrix)
-            transform.postTranslate(parent.left.toFloat(), parent.top.toFloat())
             current = parent
         }
         // The root view's location in the window is its own corner, already composed above, rounded to whole pixels,
-        // plus the pan the window applies to all of its views.
+        // plus the pan.
         val rootLocation = IntArray(2)
         current.getLocationInWindow(rootLocation)
         val rootCorner = floatArrayOf(0f, 0f).also { corner -> current.matrix.mapPoints(corner) }
@@ -605,6 +621,14 @@ class UIHelperImpl(
             (rootLocation[0] - (rootCorner[0] + current.left).roundToInt()).toFloat(),
             (rootLocation[1] - (rootCorner[1] + current.top).roundToInt()).toFloat(),
         )
+        return transform
+    }
+
+    // The box a view covers in the window, as UIKit's convertRect:toView: gives it, rounded as the renderer rounds the
+    // box it shows a SurfaceView's surface in: snapped to pixel boundaries under translation alone, outward under any
+    // other transform. A box with no area stays empty whatever its rounding would give.
+    private fun rectInWindow(view: View): Rect {
+        val transform = viewToWindow(view)
         val bounds = RectF(0f, 0f, view.width.toFloat(), view.height.toFloat()).also { rect -> transform.mapRect(rect) }
         return when {
             bounds.isEmpty -> Rect()
