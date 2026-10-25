@@ -184,12 +184,24 @@ export const getAppInfo = async (
   udid: string,
   bundleId: string,
 ): Promise<AppleAppInfo | null> => {
-  const { stdout: plistOutput } = await spawn('xcrun', [
-    'simctl',
-    'appinfo',
-    udid,
-    bundleId,
-  ]);
+  let plistOutput: string;
+
+  try {
+    const { stdout } = await spawn('xcrun', [
+      'simctl',
+      'appinfo',
+      udid,
+      bundleId,
+    ]);
+    plistOutput = stdout;
+  } catch (error) {
+    // `simctl appinfo` exits with code 3 when the app is not installed
+    if (error instanceof SubprocessError && error.exitCode === 3) {
+      return null;
+    }
+
+    throw error;
+  }
 
   const json = await plistToJson(plistOutput);
 
@@ -399,11 +411,12 @@ const GUEST_PROCESS_LIST_TIMEOUT_MS = 30_000;
 export const getGuestProcessCount = async (
   udid: string,
   signal?: AbortSignal,
+  timeoutMs: number = GUEST_PROCESS_LIST_TIMEOUT_MS,
 ): Promise<number> => {
   const { stdout } = await spawn(
     'xcrun',
     ['simctl', 'spawn', udid, 'launchctl', 'list'],
-    { timeout: GUEST_PROCESS_LIST_TIMEOUT_MS, signal },
+    { timeout: timeoutMs, signal },
   );
   return stdout.split('\n').filter((line) => /^\d+\s/.test(line)).length;
 };
