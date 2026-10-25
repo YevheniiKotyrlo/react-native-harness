@@ -12,6 +12,7 @@ import type {
 type PixelmatchOptions = Parameters<typeof pixelmatch>[5];
 
 const SNAPSHOT_DIR_NAME = '__image_snapshots__';
+const DIFF_OUTPUT_DIR_NAME = '__diff_output__';
 const DEFAULT_OPTIONS_FOR_PIXELMATCH: PixelmatchOptions = {
   threshold: 0.1,
   includeAA: false,
@@ -75,8 +76,11 @@ export const matchImageSnapshot = async (
   const snapshotsDir = path.join(testDir, SNAPSHOT_DIR_NAME, platformName);
 
   const snapshotPath = path.join(snapshotsDir, `${options.name}.png`);
+  // Failure artifacts live in their own folder so they can never overwrite
+  // a baseline of another snapshot (e.g. one named `<name>-diff`).
+  const diffOutputDir = path.join(snapshotsDir, DIFF_OUTPUT_DIR_NAME);
   const failureImagePath = (image: 'actual' | 'diff'): string =>
-    path.join(snapshotsDir, `${options.name}-${image}.png`);
+    path.join(diffOutputDir, `${options.name}-${image}.png`);
   const actualPath = failureImagePath('actual');
 
   await fs.mkdir(snapshotsDir, { recursive: true });
@@ -85,6 +89,7 @@ export const matchImageSnapshot = async (
     await fs.access(snapshotPath);
   } catch {
     if (updateSnapshot === 'none') {
+      await fs.mkdir(diffOutputDir, { recursive: true });
       await fs.writeFile(actualPath, receivedBuffer);
       return {
         pass: false,
@@ -110,9 +115,12 @@ export const matchImageSnapshot = async (
   const diff = new PNG({ width, height });
 
   if (img1.width !== img2.width || img1.height !== img2.height) {
+    await fs.mkdir(diffOutputDir, { recursive: true });
+    await fs.writeFile(actualPath, receivedBuffer);
+
     return {
       pass: false,
-      message: `Images have different dimensions. Received image width: ${img1.width}, height: ${img1.height}. Snapshot image width: ${img2.width}, height: ${img2.height}.`,
+      message: `Images have different dimensions. Received image width: ${img1.width}, height: ${img1.height}. Snapshot image width: ${img2.width}, height: ${img2.height}. Actual image saved at ${actualPath}.`,
     };
   }
 
@@ -167,6 +175,8 @@ export const matchImageSnapshot = async (
 
   // Save diff and actual images when test fails
   if (!pass) {
+    await fs.mkdir(diffOutputDir, { recursive: true });
+
     const diffPath = failureImagePath('diff');
     await fs.writeFile(diffPath, PNG.sync.write(diff));
 

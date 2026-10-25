@@ -42,9 +42,9 @@ describe('Element Queries', () => {
       </View>
     );
 
-    // These methods throw if no element is found
-    const welcomeText = screen.findByTestId('welcome-text');
-    const subtitle = screen.findByTestId('subtitle');
+    // These methods wait for the element and reject if it does not appear
+    const welcomeText = await screen.findByTestId('welcome-text');
+    const subtitle = await screen.findByTestId('subtitle');
 
     // These methods return null if no element is found
     const welcomeTextSafe = screen.queryByTestId('welcome-text');
@@ -58,21 +58,23 @@ describe('Element Queries', () => {
       </View>
     );
 
-    const heading = screen.findByAccessibilityLabel('Main heading');
+    const heading = await screen.findByAccessibilityLabel('Main heading');
   });
 });
 ```
 
 ### Available query methods
 
+The `find*` methods are asynchronous: `await` them. They poll until the element appears (up to one second) and reject if it does not. The `query*` methods are synchronous and check once.
+
 | Method                                | Description                                                                  |
 | ------------------------------------- | ---------------------------------------------------------------------------- |
-| `findByTestId(testId)`                | Find single element by testID (throws if not found)                          |
-| `findAllByTestId(testId)`             | Find all elements by testID (throws if none found)                           |
+| `findByTestId(testId)`                | Find single element by testID (waits, rejects if not found)                  |
+| `findAllByTestId(testId)`             | Find all elements by testID (waits, rejects if none found)                   |
 | `queryByTestId(testId)`               | Find single element by testID (returns null if not found)                    |
 | `queryAllByTestId(testId)`            | Find all elements by testID (returns empty array if none found)              |
-| `findByAccessibilityLabel(label)`     | Find single element by accessibility label (throws if not found)             |
-| `findAllByAccessibilityLabel(label)`  | Find all elements by accessibility label (throws if none found)              |
+| `findByAccessibilityLabel(label)`     | Find single element by accessibility label (waits, rejects if not found)     |
+| `findAllByAccessibilityLabel(label)`  | Find all elements by accessibility label (waits, rejects if none found)      |
 | `queryByAccessibilityLabel(label)`    | Find single element by accessibility label (returns null if not found)       |
 | `queryAllByAccessibilityLabel(label)` | Find all elements by accessibility label (returns empty array if none found) |
 
@@ -110,6 +112,8 @@ describe('Screenshot Testing', () => {
   });
 });
 ```
+
+Baselines are stored in `__image_snapshots__/<runner>/` next to the test file. When a comparison fails, Harness saves `<name>-diff.png` and `<name>-actual.png` into `__image_snapshots__/<runner>/__diff_output__/`. You can add `__diff_output__/` to your `.gitignore` to keep these files out of version control.
 
 ### Screenshot options
 
@@ -150,7 +154,7 @@ test('screenshot with custom options', async () => {
 
 ### Creating snapshots
 
-`toMatchImageSnapshot` stores each snapshot as `__image_snapshots__/<runner>/<name>.png` next to the test file. When that file does not exist, the test writes it and passes, except in Jest's [CI mode](https://jestjs.io/docs/cli#--ci), where the test fails without writing it and saves the received image beside it as `<name>-actual.png`. Jest turns CI mode on when it detects a CI environment, such as one with the `CI` environment variable set; `--ci` and `--ci=false` override that.
+`toMatchImageSnapshot` stores each snapshot as `__image_snapshots__/<runner>/<name>.png` next to the test file. When that file does not exist, the test writes it and passes, except in Jest's [CI mode](https://jestjs.io/docs/cli#--ci), where the test fails without writing it and saves the received image as `__diff_output__/<name>-actual.png`. Jest turns CI mode on when it detects a CI environment, such as one with the `CI` environment variable set; `--ci` and `--ci=false` override that.
 
 Snapshots are compared pixel by pixel, so create them on the device, simulator or browser that compares them: commit the `<name>-actual.png` a CI run saved for a missing snapshot as `<name>.png`, or run with `--ci=false` on a machine with that device and commit what it writes. The [GitHub Action](/docs/guides/ci-cd) uploads the `-actual.png` images of a run as its `visual-test-diffs-<platformId>` artifact; in other CI, upload `**/__image_snapshots__/**/*-actual.png` from the job.
 
@@ -179,7 +183,7 @@ test('capture specific element', async () => {
     </View>
   );
 
-  const headerElement = screen.findByTestId('header');
+  const headerElement = await screen.findByTestId('header');
   const headerScreenshot = await screen.screenshot(headerElement);
 
   await expect(headerScreenshot).toMatchImageSnapshot({
@@ -222,20 +226,24 @@ describe('User Interactions', () => {
       </TouchableOpacity>
     );
 
-    const button = screen.findByTestId('my-button');
+    const button = await screen.findByTestId('my-button');
     await userEvent.press(button);
 
     expect(onPress).toHaveBeenCalled();
   });
 
   test('text input', async () => {
-    await render(<TextInput testID="username-input" />);
+    const onChangeText = fn();
 
-    const input = screen.findByTestId('username-input');
+    await render(
+      <TextInput testID="username-input" onChangeText={onChangeText} />
+    );
+
+    const input = await screen.findByTestId('username-input');
     await userEvent.type(input, 'testuser');
 
-    // Verify the input value
-    expect(input.props.value).toBe('testuser');
+    // onChangeText fires for each character, so the last call has the full text
+    expect(onChangeText).toHaveBeenLastCalledWith('testuser');
   });
 });
 
