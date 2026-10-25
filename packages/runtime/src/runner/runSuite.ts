@@ -10,11 +10,13 @@ import {
   type HarnessExpectTestState,
 } from '../expect/context.js';
 import { flushExpectTestState } from '../expect/errors.js';
+import { flushOutgoingMessages } from '../utils/yield.js';
 import { runHooks, type HookType } from './hooks.js';
 import { getTestExecutionError } from './errors.js';
 import { ActiveTestContext, TestRunnerContext } from './types.js';
 import {
   getPendingPromises,
+  retainPendingPromises,
   omitPromiseFromTracking,
   runWithoutPromiseTracking,
   type TrackedPromiseRecord,
@@ -162,15 +164,28 @@ const withTestTimeout = async <T>(
           promise.test.phase === 'afterEach'),
     );
 
-  return await withRuntimeTimeout(work, {
-    timeout: options.timeout,
-    createTimeoutError: () =>
-      new TestCaseTimeoutError(options.fullName, options.timeout, {
-        pendingPromises: getPendingPromiseDiagnostics(
-          getMatchingPendingPromises(),
-        ),
-      }),
-  });
+  const release = retainPendingPromises(
+    (test) =>
+      test.file === options.file &&
+      test.fullName === options.fullName &&
+      (test.phase === 'beforeEach' ||
+        test.phase === 'test' ||
+        test.phase === 'afterEach'),
+  );
+
+  try {
+    return await withRuntimeTimeout(work, {
+      timeout: options.timeout,
+      createTimeoutError: () =>
+        new TestCaseTimeoutError(options.fullName, options.timeout, {
+          pendingPromises: getPendingPromiseDiagnostics(
+            getMatchingPendingPromises(),
+          ),
+        }),
+    });
+  } finally {
+    release();
+  }
 };
 
 const withSuiteHookTimeout = async (
@@ -190,9 +205,15 @@ const withSuiteHookTimeout = async (
         promise.test.phase === options.hookType,
     );
 
-  return await withRuntimeTimeout(
-    work,
-    {
+  const release = retainPendingPromises(
+    (test) =>
+      test.file === options.file &&
+      test.suite === options.suiteName &&
+      test.phase === options.hookType,
+  );
+
+  try {
+    return await withRuntimeTimeout(work, {
       timeout: options.timeout,
       createTimeoutError: () =>
         new SuiteHookTimeoutError(
@@ -205,8 +226,10 @@ const withSuiteHookTimeout = async (
             ),
           },
         ),
-    },
-  );
+    });
+  } finally {
+    release();
+  }
 };
 
 const emitTestFinished = (
@@ -362,6 +385,7 @@ const runTest = async (
 
   // Emit test-started event
   const ancestorTitles = getAncestorTitles(suite);
+  const runsTest = test.status !== 'skipped' && test.status !== 'todo';
   context.events.emit({
     type: 'test-started',
     name: test.name,
@@ -371,7 +395,16 @@ const runTest = async (
     fullName: getFullName(ancestorTitles, test.name),
     startedAt,
     declarationMode: test.declarationMode,
+    // The harness enforces this from the CLI side too, because the timer
+    // below cannot fire while the test blocks the JS thread.
+    timeout: runsTest ? getTestTimeout(context) : undefined,
   });
+
+  if (runsTest) {
+    // Let test-started reach the harness before the test can block the
+    // thread, so the test's own timeout applies to it.
+    await flushOutgoingMessages();
+  }
 
   try {
     if (test.status === 'skipped') {
@@ -599,10 +632,14 @@ export const runSuite = async (
   const startTime = Date.now();
 
   // Emit suite-started event
+  const runsSuite = suite.status !== 'skipped' && suite.status !== 'todo';
   context.events.emit({
     type: 'suite-started',
     name: suite.name,
     file: context.testFilePath,
+    // The harness applies the hook timeout to beforeAll/afterAll from the
+    // CLI side too, because the timer cannot fire while a hook blocks.
+    timeout: runsSuite ? getTestTimeout(context) : undefined,
   });
 
   // Check if suite should be skipped or is todo
@@ -661,6 +698,9 @@ export const runSuite = async (
 
   const testResults: TestResult[] = [];
   const suiteResults: TestSuiteResult[] = [];
+
+  // Let suite-started reach the harness before a beforeAll can block.
+  await flushOutgoingMessages();
 
   // Run beforeAll hooks
   try {
@@ -747,6 +787,10 @@ export const runSuite = async (
   // Run afterAll hooks
   let suiteError: TestSuiteResult['error'];
   if (!state.interruptedByTimeout) {
+    // Let the last test-finished or suite-finished, which restores this
+    // suite's hook budget, reach the harness before an afterAll can block.
+    await flushOutgoingMessages();
+
     try {
       await withSuiteHookTimeout(
         () =>

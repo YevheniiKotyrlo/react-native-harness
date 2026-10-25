@@ -42,6 +42,11 @@ export type TestRunnerSuiteStartedEvent = {
   type: 'suite-started';
   name: string;
   file: string;
+  /**
+   * The timeout in ms of the suite's `beforeAll`/`afterAll` hooks. Absent
+   * for suites that are skipped or todo.
+   */
+  timeout?: number;
 };
 
 export type TestRunnerTestStartedEvent = {
@@ -53,6 +58,11 @@ export type TestRunnerTestStartedEvent = {
   fullName: string;
   startedAt: number;
   declarationMode?: TestDeclarationMode;
+  /**
+   * The test's timeout in ms, covering its `beforeEach`/`afterEach` hooks.
+   * Absent for tests that are skipped or todo.
+   */
+  timeout?: number;
 };
 
 export type TestRunnerTestFinishedEvent = {
