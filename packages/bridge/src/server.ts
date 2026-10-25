@@ -12,7 +12,11 @@ import {
   AppBridgeDisconnectedError,
   DeviceNotRespondingError,
 } from './errors.js';
-import { createHeartbeat } from './heartbeat.js';
+import {
+  createAppLiveness,
+  resolveAppLivenessOptions,
+  type AppLivenessOverrides,
+} from './app-liveness.js';
 import { matchImageSnapshot } from './image-snapshot.js';
 import {
   createLink,
@@ -39,6 +43,10 @@ export {
   AppBridgeDisconnectedError,
   DeviceNotRespondingError,
 } from './errors.js';
+export {
+  DEFAULT_APP_LIVENESS_OPTIONS,
+  type AppLivenessOverrides,
+} from './app-liveness.js';
 
 const bridgeLogger = logger.child('bridge');
 const noop = (): void => undefined;
@@ -63,6 +71,8 @@ type TransportOptions =
 export type HarnessBridgeOptions = TransportOptions & {
   timeout?: number;
   context: HarnessContext;
+  /** Overrides for the connection check and JS watchdog limits. */
+  liveness?: AppLivenessOverrides;
 };
 
 export type HarnessBridge = {
@@ -113,11 +123,16 @@ const receiveScreenshot = async (
 export const createHarnessBridge = async (
   options: HarnessBridgeOptions,
 ): Promise<HarnessBridge> => {
-  const { timeout, context, ...transportOptions } = options;
+  const { timeout, context, liveness, ...transportOptions } = options;
+  const livenessOptions = resolveAppLivenessOptions(liveness);
   const wss = await createWss(transportOptions);
   bridgeLogger.debug('bridge server ready');
 
   const emitter = new EventEmitter();
+  // Screenshot files written by this bridge that have not been compared yet.
+  const receivedScreenshots = new Set<string>();
+  const removeScreenshot = (file: string) =>
+    fs.rm(file, { force: true }).catch(() => undefined);
   let currentConnection: AppConnection | null = null;
   let activeSession: { disconnect: (reason?: Error) => void; link: LinkConnection } | null =
     null;
@@ -153,9 +168,26 @@ export const createHarnessBridge = async (
       BridgeEvents
     >({
       localMethods: {
-        'device.screenshot.receive': (ref) => receiveScreenshot(link, ref),
-        'test.matchImageSnapshot': (screenshot, testPath, opts) =>
-          matchImageSnapshot(screenshot, testPath, opts, context.platform.name),
+        'device.screenshot.receive': async (ref) => {
+          const file = await receiveScreenshot(link, ref);
+          receivedScreenshots.add(file.path);
+          return file;
+        },
+        'test.matchImageSnapshot': async (screenshot, testPath, opts) => {
+          try {
+            return await matchImageSnapshot(
+              screenshot,
+              testPath,
+              opts,
+              context.platform.name,
+            );
+          } finally {
+            // Only delete files this bridge created, never a client-supplied path.
+            if (receivedScreenshots.delete(screenshot.path)) {
+              await removeScreenshot(screenshot.path);
+            }
+          }
+        },
       },
       transport: {
         send: (message) => {
@@ -163,6 +195,7 @@ export const createHarnessBridge = async (
         },
       },
       onEvent: (event) => {
+        appLiveness.handleEvent(event);
         emitter.emit('event', event);
       },
       callTimeoutMs: (method) => method === 'runTests' ? undefined : timeout,
@@ -171,14 +204,24 @@ export const createHarnessBridge = async (
       },
     });
 
-    const heartbeat = createHeartbeat({
-      sendPing: (id) => {
-        void link.write(serializeBridgeMessage({ type: 'ping', id }));
+    const appLiveness = createAppLiveness({
+      socket: ws,
+      sendProbe: (id) => {
+        void link.write(serializeBridgeMessage({ type: 'js-probe', id }));
       },
-      onTimeout: () => {
-        bridgeLogger.warn('app heartbeat timed out');
-        disconnect(new AppBridgeDisconnectedError('heartbeat-timeout'));
+      onLost: (error) => {
+        if (error.reason === 'connection-lost') {
+          bridgeLogger.warn('app connection lost (no response to WebSocket ping)');
+        } else {
+          bridgeLogger.warn('app JS thread unresponsive: %s', error.detail);
+        }
+
+        disconnect(error);
+        // Neither a half-open socket nor a blocked JS thread completes a
+        // close handshake, so drop the socket instead of waiting for one.
+        ws.terminate();
       },
+      config: livenessOptions,
     });
 
     const disconnect = (reason?: Error) => {
@@ -191,7 +234,7 @@ export const createHarnessBridge = async (
       offClose();
       offError();
       bridgeLogger.debug('app disconnected');
-      heartbeat.dispose();
+      appLiveness.dispose();
 
       if (activeSession?.link === link) {
         activeSession = null;
@@ -244,14 +287,8 @@ export const createHarnessBridge = async (
           }
           return;
         }
-        case 'ping': {
-          void link.write(
-            serializeBridgeMessage({ type: 'pong', id: controlMessage.id }),
-          );
-          return;
-        }
-        case 'pong': {
-          heartbeat.notifyPong(controlMessage.id);
+        case 'js-probe-ack': {
+          appLiveness.handleProbeAck(controlMessage.id);
           return;
         }
       }
@@ -333,6 +370,11 @@ export const createHarnessBridge = async (
 
       wss.close();
       emitter.removeAllListeners();
+
+      for (const file of receivedScreenshots) {
+        void removeScreenshot(file);
+      }
+      receivedScreenshots.clear();
     },
   };
 };
