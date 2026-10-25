@@ -1,7 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import * as tools from '@react-native-harness/tools';
+import { runWithHarnessContext } from '@react-native-harness/tools/harness-context';
+import { createFakeProcessManager } from '@react-native-harness/tools/testing';
 import {
   diagnose,
+  getAppInfo,
   getGuestProcessCount,
   parseBootStatus,
   streamLogs,
@@ -26,7 +29,6 @@ const BOOTSTATUS_OUTPUT = `Monitoring boot status for iPhone 17e (0461A3FF-A9E3-
 \tWaiting on System App
 `;
 
-
 describe('simctl startup', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -34,26 +36,36 @@ describe('simctl startup', () => {
 
   it('passes the abort signal to simctl bootstatus', async () => {
     const signal = new AbortController().signal;
-    const spawnSpy = vi
-      .spyOn(tools, 'spawn')
-      .mockResolvedValue({} as Awaited<ReturnType<typeof tools.spawn>>);
-
-    await waitForBoot('sim-udid', signal);
-
-    expect(spawnSpy).toHaveBeenCalledWith(
+    const fake = createFakeProcessManager().on(
       'xcrun',
       ['simctl', 'bootstatus', 'sim-udid', '-b'],
-      { signal },
+      {}
     );
+
+    await runWithHarnessContext({ process: fake }, () =>
+      waitForBoot('sim-udid', signal)
+    );
+
+    expect(fake.calls).toEqual([
+      {
+        file: 'xcrun',
+        args: ['simctl', 'bootstatus', 'sim-udid', '-b'],
+        options: { signal },
+      },
+    ]);
   });
 
   it('returns the last reported stage and elapsed time from bootstatus', async () => {
-    vi.spyOn(tools, 'spawn').mockResolvedValue({
-      stdout: BOOTSTATUS_OUTPUT,
-    } as Awaited<ReturnType<typeof tools.spawn>>);
+    const fake = createFakeProcessManager().on(
+      'xcrun',
+      ['simctl', 'bootstatus', 'sim-udid', '-b'],
+      { stdout: BOOTSTATUS_OUTPUT }
+    );
 
     await expect(
-      waitForBoot('sim-udid', new AbortController().signal),
+      runWithHarnessContext({ process: fake }, () =>
+        waitForBoot('sim-udid', new AbortController().signal)
+      )
     ).resolves.toEqual({
       lastStatusLine: 'Waiting on System App',
       elapsedSeconds: 116,
@@ -61,26 +73,23 @@ describe('simctl startup', () => {
   });
 
   it('runs simctl diagnose into the provided directory', async () => {
-    const spawnSpy = vi
-      .spyOn(tools, 'spawn')
-      .mockResolvedValue({} as Awaited<ReturnType<typeof tools.spawn>>);
+    const args = [
+      'simctl',
+      'diagnose',
+      '--udid=sim-udid',
+      '--no-archive',
+      '--output=/tmp/sim-diagnose-output',
+      '-b',
+    ];
+    const fake = createFakeProcessManager().on('xcrun', args, {});
 
-    await diagnose('sim-udid', '/tmp/sim-diagnose-output');
-
-    expect(spawnSpy).toHaveBeenCalledWith(
-      'xcrun',
-      [
-        'simctl',
-        'diagnose',
-        '--udid=sim-udid',
-        '--no-archive',
-        '--output=/tmp/sim-diagnose-output',
-        '-b',
-      ],
-      {
-        stdin: { string: '\n' },
-      },
+    await runWithHarnessContext({ process: fake }, () =>
+      diagnose('sim-udid', '/tmp/sim-diagnose-output')
     );
+
+    expect(fake.calls).toEqual([
+      { file: 'xcrun', args, options: { stdin: { string: '\n' } } },
+    ]);
   });
 
   it('starts simulator log streaming with the provided predicate', () => {
@@ -120,17 +129,35 @@ describe('simctl startup', () => {
 
   it('counts only running guest processes, not loaded jobs without a PID', async () => {
     const signal = new AbortController().signal;
-    const spawnSpy = vi.spyOn(tools, 'spawn').mockResolvedValue({
+    const args = ['simctl', 'spawn', 'sim-udid', 'launchctl', 'list'];
+    const fake = createFakeProcessManager().on('xcrun', args, {
       stdout:
         'PID\tStatus\tLabel\n-\t0\tcom.apple.progressd\n95823\t0\tcom.apple.homed\n-\t78\tcom.apple.cloudphotod\n402\t0\tcom.apple.backboardd\n',
-    } as Awaited<ReturnType<typeof tools.spawn>>);
+    });
 
-    await expect(getGuestProcessCount('sim-udid', signal)).resolves.toBe(2);
-    expect(spawnSpy).toHaveBeenCalledWith(
-      'xcrun',
-      ['simctl', 'spawn', 'sim-udid', 'launchctl', 'list'],
-      { timeout: 30_000, signal },
-    );
+    await expect(
+      runWithHarnessContext({ process: fake }, () =>
+        getGuestProcessCount('sim-udid', signal)
+      )
+    ).resolves.toBe(2);
+    expect(fake.calls).toEqual([
+      { file: 'xcrun', args, options: { timeout: 30_000, signal } },
+    ]);
+  });
+});
+
+describe('getAppInfo', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns null when simctl appinfo exits with code 3 for a missing app', async () => {
+    const error = Object.assign(Object.create(tools.SubprocessError.prototype), {
+      exitCode: 3,
+    });
+    vi.spyOn(tools, 'spawn').mockRejectedValue(error);
+
+    await expect(getAppInfo('sim-udid', 'com.example.app')).resolves.toBeNull();
   });
 });
 
@@ -149,8 +176,8 @@ describe('parseBootStatus', () => {
   it('reports the terminal stage once the boot has finished', () => {
     expect(
       parseBootStatus(
-        '[2026-10-16 06:48:02 +0000] Status=4294967295, isTerminal=YES, Elapsed=00:58.\n\tFinished\n',
-      ),
+        '[2026-10-16 06:48:02 +0000] Status=4294967295, isTerminal=YES, Elapsed=00:58.\n\tFinished\n'
+      )
     ).toEqual({ lastStatusLine: 'Finished', elapsedSeconds: 58 });
   });
 });
@@ -161,15 +188,18 @@ describe('simctl diagnostics attrs', () => {
       simctlResultAttrs('waitForBoot', {
         lastStatusLine: 'Finished',
         elapsedSeconds: 58,
-      }),
+      })
     ).toEqual({ bootLastStatus: 'Finished', bootElapsedSeconds: 58 });
     expect(simctlResultAttrs('bootSimulator', undefined)).toBeUndefined();
   });
 
   it('recovers the stage a timed-out waitForBoot was stuck on', () => {
-    const error = Object.assign(Object.create(tools.SubprocessError.prototype), {
-      stdout: BOOTSTATUS_OUTPUT,
-    });
+    const error = Object.assign(
+      Object.create(tools.SubprocessError.prototype),
+      {
+        stdout: BOOTSTATUS_OUTPUT,
+      }
+    );
 
     expect(simctlErrorAttrs('waitForBoot', error)).toEqual({
       bootLastStatus: 'Waiting on System App',

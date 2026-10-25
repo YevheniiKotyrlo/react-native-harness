@@ -275,39 +275,49 @@ class UIHelperImpl(
                 val nativeId = if (bounds != null && bounds.hasKey("nativeId")) bounds.getString("nativeId") else null
 
                 if (!nativeId.isNullOrEmpty()) {
+                    // Element screenshots never fall back to a window/region capture.
                     val targetView = ViewRegistry.get(nativeId)
-                    if (targetView != null) {
-                        val width = targetView.width
-                        val height = targetView.height
-
-                        if (width > 0 && height > 0) {
-                            val viewRect = rectInWindow(targetView)
-                            val rootRect = Rect(0, 0, root.width, root.height)
-
-                            if (targetView.isAttachedToWindow && !viewRect.isEmpty && rootRect.contains(viewRect)) {
-                                Log.i(TAG, "View $nativeId is fully on screen. Using screen-based screenshotting.")
-                                captureWindowRegion(window, viewRect, promise)
-                            } else {
-                                Log.i(TAG, "View $nativeId is not fully on screen. Using direct view render.")
-                                promise.resolve(encodePng(drawView(targetView)))
-                            }
-                            return@runOnUiThread
-                        }
-                    } else {
-                        Log.w(TAG, "View with nativeId $nativeId not found for screenshot, falling back to window screenshot")
+                    if (targetView == null) {
+                        Log.w(TAG, "View with nativeId $nativeId not found for screenshot")
+                        promise.resolve(null)
+                        return@runOnUiThread
                     }
+
+                    val width = targetView.width
+                    val height = targetView.height
+
+                    if (width <= 0 || height <= 0) {
+                        Log.w(TAG, "View $nativeId has zero size ($width x $height), nothing to capture")
+                        promise.resolve(null)
+                        return@runOnUiThread
+                    }
+
+                    val viewRect = rectInWindow(targetView)
+                    val rootRect = Rect(0, 0, root.width, root.height)
+
+                    if (targetView.isAttachedToWindow && !viewRect.isEmpty && rootRect.contains(viewRect)) {
+                        Log.i(TAG, "View $nativeId is fully on screen. Using screen-based screenshotting.")
+                        captureWindowRegion(window, viewRect, promise)
+                    } else {
+                        Log.i(TAG, "View $nativeId is not fully on screen. Using direct view render.")
+                        promise.resolve(encodePng(drawView(targetView)))
+                    }
+                    return@runOnUiThread
                 }
 
                 // Check if bounds are provided and have non-zero dimensions
                 val region =
                     if (bounds != null && bounds.getDouble("width") > 0 && bounds.getDouble("height") > 0) {
-                        // Convert dp to px for bounds
-                        val captureX = (bounds.getDouble("x") * density).toInt()
-                        val captureY = (bounds.getDouble("y") * density).toInt()
-                        val captureWidth = (bounds.getDouble("width") * density).toInt()
-                        val captureHeight = (bounds.getDouble("height") * density).toInt()
-                        Log.i(TAG, "Capturing region: x=$captureX y=$captureY w=$captureWidth h=$captureHeight")
-                        Rect(captureX, captureY, captureX + captureWidth, captureY + captureHeight)
+                        // Convert dp to px, rounding each edge (not the size) so the region covers the same
+                        // pixels React Native lays out for a view with these bounds.
+                        val boundsX = bounds.getDouble("x")
+                        val boundsY = bounds.getDouble("y")
+                        val left = (boundsX * density).roundToInt()
+                        val top = (boundsY * density).roundToInt()
+                        val right = ((boundsX + bounds.getDouble("width")) * density).roundToInt()
+                        val bottom = ((boundsY + bounds.getDouble("height")) * density).roundToInt()
+                        Log.i(TAG, "Capturing region: x=$left y=$top w=${right - left} h=${bottom - top}")
+                        Rect(left, top, right, bottom)
                     } else {
                         Log.i(TAG, "Capturing full window: w=${root.width} h=${root.height}")
                         Rect(0, 0, root.width, root.height)
