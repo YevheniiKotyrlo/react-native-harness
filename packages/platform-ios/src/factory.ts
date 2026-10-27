@@ -5,14 +5,17 @@ import type {
   ApplePhysicalDeviceCodeSign,
   ApplePlatformConfig,
 } from './config.js';
+import { shouldDeferMetroPrewarmUntilBooted } from './startup-strategy.js';
 
 export const appleSimulator = (
   name: string,
-  systemVersion: string
+  systemVersion: string,
+  options?: { slimOnCI?: boolean }
 ): AppleSimulator => ({
   type: 'simulator',
   name,
   systemVersion,
+  ...(options?.slimOnCI === undefined ? {} : { slimOnCI: options.slimOnCI }),
 });
 
 export const applePhysicalDevice = (
@@ -36,4 +39,6 @@ export const applePlatform = (
     config.device.type === 'simulator'
       ? `ios:simulator:${config.device.name}:${config.device.systemVersion}`
       : `ios:physical:${config.device.name}`,
+  deferMetroPrewarm: () =>
+    config.device.type === 'simulator' && shouldDeferMetroPrewarmUntilBooted(),
 });
